@@ -1,6 +1,8 @@
 from django.contrib.auth.models import User
 from rest_framework import serializers
-from .models import Lead, Client
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+from .models import Lead, Client, CustomUser
 
 
 class LeadSerializer(serializers.ModelSerializer):
@@ -32,3 +34,27 @@ class ExternalLeadSerializer(serializers.ModelSerializer):
             'price',
             'assigned_to',
         ]
+
+
+
+class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        user = self.user
+
+        try:
+            custom_user = CustomUser.objects.get(user=user)
+            interface_type = custom_user.interface_type
+            interface_label = custom_user.get_interface_type_display()
+        except CustomUser.DoesNotExist:
+            interface_type = None
+            interface_label = None
+
+        data.update({
+            "username": user.username,
+            "full_name": f"{user.first_name} {user.last_name}".strip(),
+            "interface_type": interface_type,
+            "interface_label": interface_label,
+            "groups": list(user.groups.values_list("name", flat=True)),
+        })
+        return data

@@ -15,11 +15,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from NashCRM import settings
 from backend.forms import LeadsReportForm
 from backend.models import CustomUser, Lead, Client, LeadPaymentOperation
-from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer
+from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer
 from backend.services.lead_creation_service import create_lead_with_logic
 from datetime import datetime, timedelta
 
@@ -29,6 +30,10 @@ from datetime import datetime, timedelta
 def ping(request):
     return Response({"msg": f"Привіт, {request.user.username}!"})
 
+
+
+class MyTokenObtainPairView(TokenObtainPairView):
+    serializer_class = MyTokenObtainPairSerializer
 
 class LoginView(APIView):
     def post(self, request):

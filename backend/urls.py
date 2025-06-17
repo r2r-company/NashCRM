@@ -5,7 +5,7 @@ from django.contrib import admin
 
 from backend.views import ping, LeadViewSet, LoginView, ClientViewSet, ExternalLeadView, \
     LeadsReportView, geocode_address, \
-    funnel_data, leads_report, all_payments
+    funnel_data, leads_report, all_payments, MyTokenObtainPairView
 
 router = DefaultRouter()
 router.register(r'leads', LeadViewSet)
@@ -13,7 +13,7 @@ router.register(r'clients', ClientViewSet)
 
 urlpatterns = [
     path('ping/', ping),
-    path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('token/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('login/', LoginView.as_view()),  # 👈 наш кастомний login
     path('external-lead/', ExternalLeadView.as_view()),
