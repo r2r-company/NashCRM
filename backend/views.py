@@ -4,6 +4,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth import authenticate, get_user_model
 # Create your views here.
 import requests
+from django.contrib.auth.models import Permission
 from django.db.models import Count, Sum, DurationField, ExpressionWrapper, F
 from django.shortcuts import render
 from django.utils.dateparse import parse_date
@@ -41,13 +42,27 @@ class LoginView(APIView):
         refresh = RefreshToken.for_user(user)
         custom_user = CustomUser.objects.get(user=user)
 
+        groups = list(user.groups.values_list("name", flat=True))
+        permissions = list(Permission.objects.filter(user=user).values_list("codename", flat=True))
+
         return Response({
             "access": str(refresh.access_token),
             "refresh": str(refresh),
-            "username": user.username,
-            "interface_type": custom_user.interface_type  # наприклад: "admin", "manager", "storekeeper"
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "interface_type": custom_user.interface_type,
+                "groups": groups,
+                "permissions": permissions,
+                "is_staff": user.is_staff,
+                "is_superuser": user.is_superuser,
+                "last_login": user.last_login,
+                "date_joined": user.date_joined,
+            }
         })
-
 
 class ClientViewSet(viewsets.ModelViewSet):
     queryset = Client.objects.all().order_by('-created_at')
