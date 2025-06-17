@@ -28,7 +28,7 @@ SECRET_KEY = 'django-insecure-q^cstj+vp83u^gqy_864z5um7sviic5=bfnl%esn6p4-jzk^3=
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*', 'nashcrm.onrender.com']
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
