@@ -35,6 +35,21 @@ def ping(request):
 class MyTokenObtainPairView(TokenObtainPairView):
     serializer_class = MyTokenObtainPairSerializer
 
+    def post(self, request, *args, **kwargs):
+        raw_response = super().post(request, *args, **kwargs)
+        tokens = {
+            "access": raw_response.data.get("access"),
+            "refresh": raw_response.data.get("refresh"),
+        }
+        user_info = {
+            k: v for k, v in raw_response.data.items() if k not in tokens
+        }
+        raw_response.data = {
+            "data": tokens,
+            "meta": user_info
+        }
+        return raw_response
+
 class LoginView(APIView):
     def post(self, request):
         username = request.data.get("username")
