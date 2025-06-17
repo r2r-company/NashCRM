@@ -36,19 +36,26 @@ class MyTokenObtainPairView(TokenObtainPairView):
     serializer_class = MyTokenObtainPairSerializer
 
     def post(self, request, *args, **kwargs):
-        raw_response = super().post(request, *args, **kwargs)
+        response = super().post(request, *args, **kwargs)
+        raw = response.data
+
+        # Відділяємо токени і решту
         tokens = {
-            "access": raw_response.data.get("access"),
-            "refresh": raw_response.data.get("refresh"),
+            "access": raw.get("access"),
+            "refresh": raw.get("refresh"),
         }
         user_info = {
-            k: v for k, v in raw_response.data.items() if k not in tokens
+            k: v for k, v in raw.items() if k not in tokens
         }
-        raw_response.data = {
-            "data": tokens,
-            "meta": user_info
+
+        response.data = {
+            "data": {
+                **tokens,
+                "user": user_info
+            },
+            "meta": {}
         }
-        return raw_response
+        return response
 
 class LoginView(APIView):
     def post(self, request):
