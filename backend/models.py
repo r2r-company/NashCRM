@@ -133,7 +133,7 @@ class EmailIntegrationSettings(models.Model):
     imap_host = models.CharField(max_length=100, default="imap.gmail.com", verbose_name="IMAP хост")
     folder = models.CharField(max_length=50, default="INBOX", verbose_name="Папка")
 
-    allowed_sender = models.EmailField(verbose_name="Дозволений відправник")
+    allowed_sender = models.CharField(max_length=255, verbose_name="Дозволений відправник")
     allowed_subject_keyword = models.CharField(max_length=100, blank=True, verbose_name="Ключове слово в темі")
     check_interval = models.PositiveIntegerField(default=30, verbose_name="Інтервал перевірки (сек)")
 

@@ -49,7 +49,7 @@ class Command(BaseCommand):
         def fetch():
             self.stdout.write(f"📥 Парсимо пошту з {since_date.strftime('%Y-%m-%d')}...")
             try:
-                fetch_emails_and_create_leads(start_date=since_date)
+                fetch_emails_and_create_leads(start_date=since_date, settings_obj=settings)
                 self.stdout.write(self.style.SUCCESS("✅ Ліди з пошти створено!"))
             except Exception as e:
                 self.stderr.write(f"❌ Помилка: {str(e)}")
