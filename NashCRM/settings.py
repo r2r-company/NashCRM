@@ -28,7 +28,14 @@ SECRET_KEY = 'django-insecure-q^cstj+vp83u^gqy_864z5um7sviic5=bfnl%esn6p4-jzk^3=
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*', 'nashcrm.onrender.com']
+ALLOWED_HOSTS = [
+    'nashcrm.onrender.com',
+    '35.168.130.126',
+    '44.233.151.27',
+    '34.211.200.85',
+    'localhost',
+    '127.0.0.1',
+]
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -307,22 +314,19 @@ UNFOLD = {
     ],
 }
 
+ALLOWED_HOSTS = [
+    'nashcrm.onrender.com',
+    'localhost',
+    '127.0.0.1',
+]
+
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # Ваш фронтенд
+    "https://nash-web-crm.vercel.app",  # ← ваш фронтенд
+    "http://localhost:3000",           # локальна розробка
     "http://127.0.0.1:3000",
 ]
-CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
 
-# Додайте ці налаштування:
-CORS_ALLOW_METHODS = [
-    'DELETE',
-    'GET',
-    'OPTIONS',
-    'PATCH',
-    'POST',
-    'PUT',
-]
+CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOWED_HEADERS = [
     'accept',
@@ -336,8 +340,17 @@ CORS_ALLOWED_HEADERS = [
     'x-requested-with',
 ]
 
-# Для API запитів додайте:
+CORS_ALLOWED_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+# Для безпеки:
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    "https://nash-web-crm.vercel.app",
+    "https://nashcrm.onrender.com",
 ]
