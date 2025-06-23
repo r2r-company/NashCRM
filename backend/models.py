@@ -2,7 +2,6 @@ import re
 from django.contrib.auth.models import User
 from django.db import models
 
-
 class CustomUser(models.Model):
     INTERFACE_CHOICES = [
         ('admin', 'Адміністратор'),
@@ -18,11 +17,6 @@ class CustomUser(models.Model):
     class Meta:
         verbose_name = "Користувач інтерфейсу"
         verbose_name_plural = "Користувачі інтерфейсу"
-        # 🚀 ІНДЕКСИ для швидкого пошуку менеджерів
-        indexes = [
-            models.Index(fields=['interface_type']),
-            models.Index(fields=['user', 'interface_type']),
-        ]
 
 
 class Lead(models.Model):
@@ -63,30 +57,6 @@ class Lead(models.Model):
     class Meta:
         verbose_name = "Лід"
         verbose_name_plural = "Ліди"
-        # 🚀 КРИТИЧНІ ІНДЕКСИ для швидкості звітів і фільтрів
-        indexes = [
-            # Для воронки статусів (найчастіше використовується)
-            models.Index(fields=['status']),
-
-            # Для звітів по датах (created_at найбільш критичний)
-            models.Index(fields=['created_at']),
-            models.Index(fields=['status_updated_at']),
-
-            # Для зв'язку з клієнтами через телефон
-            models.Index(fields=['phone']),
-
-            # Для фільтрів по менеджерах
-            models.Index(fields=['assigned_to']),
-
-            # Композитні індекси для складних запитів
-            models.Index(fields=['assigned_to', 'status']),  # Звіти по менеджерах
-            models.Index(fields=['status', 'created_at']),  # Воронка по датах
-            models.Index(fields=['phone', 'status']),  # Клієнтські звіти
-            models.Index(fields=['created_at', 'assigned_to']),  # Продуктивність менеджерів
-
-            # Для фінансових звітів
-            models.Index(fields=['status', 'price']),  # Завершені ліди з сумою
-        ]
 
 
 class Client(models.Model):
@@ -136,15 +106,6 @@ class Client(models.Model):
     class Meta:
         verbose_name = "Клієнт"
         verbose_name_plural = "Клієнти"
-        # 🚀 ІНДЕКСИ для швидкого пошуку клієнтів
-        indexes = [
-            # phone вже є unique, але додаємо для JOIN з лідами
-            models.Index(fields=['phone']),
-            models.Index(fields=['status']),
-            models.Index(fields=['assigned_to']),
-            models.Index(fields=['created_at']),
-            models.Index(fields=['type', 'status']),  # Для звітів по типах клієнтів
-        ]
 
 
 class LeadPaymentOperation(models.Model):
@@ -163,23 +124,6 @@ class LeadPaymentOperation(models.Model):
     class Meta:
         verbose_name = "Фінансова операція по ліду"
         verbose_name_plural = "Фінансові операції по лідах"
-        # 🚀 КРИТИЧНІ ІНДЕКСИ для фінансових звітів
-        indexes = [
-            # Для фільтрації по типу операції (найчастіше використовується)
-            models.Index(fields=['operation_type']),
-
-            # Для зв'язку з лідом
-            models.Index(fields=['lead']),
-
-            # Для звітів по датах
-            models.Index(fields=['created_at']),
-
-            # Композитні індекси для агрегацій
-            models.Index(fields=['lead', 'operation_type']),  # Сума по ліду
-            models.Index(fields=['operation_type', 'amount']),  # Фінансові підсумки
-            models.Index(fields=['created_at', 'operation_type']),  # Звіти по датах
-            models.Index(fields=['lead', 'created_at']),  # Хронологія оплат ліда
-        ]
 
 
 class EmailIntegrationSettings(models.Model):
@@ -193,14 +137,10 @@ class EmailIntegrationSettings(models.Model):
     allowed_subject_keyword = models.CharField(max_length=100, blank=True, verbose_name="Ключове слово в темі")
     check_interval = models.PositiveIntegerField(default=30, verbose_name="Інтервал перевірки (сек)")
 
+
     def __str__(self):
         return f"{self.name} ({self.email})"
 
     class Meta:
         verbose_name = "Налаштування Email"
         verbose_name_plural = "Налаштування Email"
-        # 🚀 ІНДЕКСИ для налаштувань
-        indexes = [
-            models.Index(fields=['name']),
-            models.Index(fields=['email']),
-        ]
