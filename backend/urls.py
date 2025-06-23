@@ -6,11 +6,12 @@ from django.contrib import admin
 
 from backend.views import ping, LeadViewSet, LoginView, ClientViewSet, ExternalLeadView, \
     LeadsReportView, geocode_address, \
-    funnel_data, leads_report, all_payments, MyTokenObtainPairView
+    funnel_data, leads_report, all_payments, MyTokenObtainPairView, list_managers, ManagerViewSet
 
 router = DefaultRouter()
 router.register(r'leads', LeadViewSet)
 router.register(r'clients', ClientViewSet)
+router.register(r'managers', ManagerViewSet, basename='manager')
 
 urlpatterns = [
     path('ping/', ping),
@@ -23,7 +24,6 @@ urlpatterns = [
     path("funnel/", funnel_data),
     path("leads-report/", leads_report),
     path("payments/", all_payments),
-
 ]
 
 urlpatterns += router.urls
