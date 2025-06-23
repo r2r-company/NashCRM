@@ -413,3 +413,17 @@ DEBUG 2025-06-23 16:10:52,832 utils 3812 10960 (0.000) SELECT "cache_key", "valu
 DEBUG 2025-06-23 16:10:52,833 utils 3812 10960 (0.000) SELECT "cache_key", "value", "expires" FROM "cache_table" WHERE "cache_key" IN (':1:views.decorators.cache.cache_page.nashcrm.GET.91cbdc68949ff257b18b1f9f54e9205b.d41d8cd98f00b204e9800998ecf8427e.uk.Europe/Kyiv'); args=[':1:views.decorators.cache.cache_page.nashcrm.GET.91cbdc68949ff257b18b1f9f54e9205b.d41d8cd98f00b204e9800998ecf8427e.uk.Europe/Kyiv']; alias=default
 DEBUG 2025-06-23 16:11:02,599 utils 3812 10960 (0.000) SELECT "cache_key", "value", "expires" FROM "cache_table" WHERE "cache_key" IN (':1:views.decorators.cache.cache_header.nashcrm.91cbdc68949ff257b18b1f9f54e9205b.uk.Europe/Kyiv'); args=[':1:views.decorators.cache.cache_header.nashcrm.91cbdc68949ff257b18b1f9f54e9205b.uk.Europe/Kyiv']; alias=default
 DEBUG 2025-06-23 16:11:02,599 utils 3812 10960 (0.000) SELECT "cache_key", "value", "expires" FROM "cache_table" WHERE "cache_key" IN (':1:views.decorators.cache.cache_page.nashcrm.GET.91cbdc68949ff257b18b1f9f54e9205b.d41d8cd98f00b204e9800998ecf8427e.uk.Europe/Kyiv'); args=[':1:views.decorators.cache.cache_page.nashcrm.GET.91cbdc68949ff257b18b1f9f54e9205b.d41d8cd98f00b204e9800998ecf8427e.uk.Europe/Kyiv']; alias=default
+DEBUG 2025-06-23 16:16:11,813 utils 12468 19720 (0.000) 
+            SELECT name, type FROM sqlite_master
+            WHERE type in ('table', 'view') AND NOT name='sqlite_sequence'
+            ORDER BY name; args=None; alias=default
+DEBUG 2025-06-23 16:16:12,516 utils 13892 16284 (0.000) SELECT "backend_emailintegrationsettings"."id", "backend_emailintegrationsettings"."name", "backend_emailintegrationsettings"."email", "backend_emailintegrationsettings"."app_password", "backend_emailintegrationsettings"."imap_host", "backend_emailintegrationsettings"."folder", "backend_emailintegrationsettings"."allowed_sender", "backend_emailintegrationsettings"."allowed_subject_keyword", "backend_emailintegrationsettings"."check_interval" FROM "backend_emailintegrationsettings" WHERE "backend_emailintegrationsettings"."name" = 'default' LIMIT 21; args=('default',); alias=default
+DEBUG 2025-06-23 16:16:12,694 utils 13892 17472 (0.000) 
+            SELECT name, type FROM sqlite_master
+            WHERE type in ('table', 'view') AND NOT name='sqlite_sequence'
+            ORDER BY name; args=None; alias=default
+DEBUG 2025-06-23 16:16:12,854 utils 13892 8636 (0.000) 
+            SELECT name, type FROM sqlite_master
+            WHERE type in ('table', 'view') AND NOT name='sqlite_sequence'
+            ORDER BY name; args=None; alias=default
+DEBUG 2025-06-23 16:16:12,856 utils 13892 8636 (0.000) SELECT "django_migrations"."id", "django_migrations"."app", "django_migrations"."name", "django_migrations"."applied" FROM "django_migrations"; args=(); alias=default
