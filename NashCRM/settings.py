@@ -111,7 +111,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'backend.middleware.PerformanceMiddleware',       # 🚀 МОНІТОРИНГ ПРОДУКТИВНОСТІ
+    # 'backend.middleware.PerformanceMiddleware',       # 🚀 МОНІТОРИНГ ПРОДУКТИВНОСТІ
     'django.middleware.cache.FetchFromCacheMiddleware',  # 🚀 КЕШУВАННЯ - в кінець
 ]
 
