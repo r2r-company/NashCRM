@@ -64,38 +64,18 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 class ManagerSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username')
     first_name = serializers.CharField(source='user.first_name')
-    last_name = serializers.CharField(source='user.last_name', allow_blank=True)
+    last_name = serializers.CharField(source='user.last_name')
     email = serializers.EmailField(source='user.email')
     is_active = serializers.BooleanField(source='user.is_active')
-    password = serializers.CharField(source='user.password', write_only=True, required=False)
 
     class Meta:
         model = CustomUser
         fields = [
-            'id', 'username', 'first_name', 'last_name', 'email', 'is_active',
-            'interface_type', 'password'
+            'id',
+            'username',
+            'first_name',
+            'last_name',
+            'email',
+            'is_active',
+            'interface_type'
         ]
-
-    def create(self, validated_data):
-        user_data = validated_data.pop('user')
-        password = user_data.pop('password', None)
-        user = User.objects.create(**user_data)
-        if password:
-            user.set_password(password)
-            user.save()
-        return CustomUser.objects.create(user=user, **validated_data)
-
-    def update(self, instance, validated_data):
-        user_data = validated_data.pop('user', {})
-        user = instance.user
-        for attr, value in user_data.items():
-            if attr == 'password':
-                user.set_password(value)
-            else:
-                setattr(user, attr, value)
-        user.save()
-
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        return instance
