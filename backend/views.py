@@ -1,9 +1,7 @@
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
-from django.db.models import Count, Sum, DurationField, ExpressionWrapper, F, Q, Avg, Case, When, DecimalField
+from django.db.models import Count, Sum, DurationField, ExpressionWrapper, F, Q, Avg, Case, When, DecimalField, Prefetch
 from django.shortcuts import render
 from django.utils.dateparse import parse_date
 from django.utils.timezone import now
@@ -105,7 +103,7 @@ class LoginView(APIView):
 
 
 class ClientViewSet(viewsets.ModelViewSet):
-    # 🚀 ОПТИМІЗАЦІЯ: Завантажуємо менеджера одразу
+    # 🚀 МАКСИМАЛЬНА ОПТИМІЗАЦІЯ: Client з менеджером
     queryset = Client.objects.select_related('assigned_to').order_by('-created_at')
     serializer_class = ClientSerializer
     permission_classes = [IsAuthenticated]
@@ -485,9 +483,27 @@ def funnel_data(request):
 
 
 class LeadViewSet(viewsets.ModelViewSet):
-    queryset = Lead.objects.select_related('assigned_to').prefetch_related('payment_operations').order_by('-created_at')
+    # 🚀 МАКСИМАЛЬНА ОПТИМІЗАЦІЯ: Leads з менеджером + платежі
+    queryset = Lead.objects.select_related('assigned_to').prefetch_related(
+        Prefetch('payment_operations', queryset=LeadPaymentOperation.objects.order_by('-created_at'))
+    ).order_by('-created_at')
     serializer_class = LeadSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """🚀 ДОДАТКОВА ОПТИМІЗАЦІЯ: Кешування списку лідів"""
+        cache_key = f"leads_list_{self.request.user.id}"
+        cached_queryset = cache.get(cache_key)
+
+        if cached_queryset is None:
+            queryset = super().get_queryset()
+            # Кешуємо тільки ID для уникнення проблем з сериалізацією
+            cached_ids = list(queryset.values_list('id', flat=True)[:100])  # Перші 100
+            cache.set(cache_key, cached_ids, 60)  # Кеш на 1 хвилину
+            return queryset
+
+        # Повертаємо оптимізований queryset на основі закешованих ID
+        return self.queryset.filter(id__in=cached_queryset)
 
     @action(detail=True, methods=['post'])
     def upload_file(self, request, pk=None):
@@ -518,7 +534,7 @@ class LeadViewSet(viewsets.ModelViewSet):
             "id": f.id,
             "name": f.file.name,
             "url": request.build_absolute_uri(f.file.url),
-            "uploaded_at": f.uploaded_at,  # або просто прибери це поле
+            "uploaded_at": f.uploaded_at,
         } for f in files]
 
         return Response({
@@ -526,6 +542,62 @@ class LeadViewSet(viewsets.ModelViewSet):
             "files": result
         })
 
+    @action(detail=True, methods=['get'])
+    def payments(self, request, pk=None):
+        """🚀 НОВА ОПТИМІЗАЦІЯ: Платежі по ліду з кешем"""
+        lead = self.get_object()
+
+        cache_key = f"lead_payments_{lead.id}"
+        cached_payments = cache.get(cache_key)
+
+        if cached_payments is None:
+            payments = lead.payment_operations.all()
+            cached_payments = [
+                {
+                    "id": p.id,
+                    "type": p.operation_type,
+                    "amount": float(p.amount),
+                    "comment": p.comment,
+                    "created_at": p.created_at,
+                } for p in payments
+            ]
+            cache.set(cache_key, cached_payments, 300)  # 5 хвилин
+
+        return Response(cached_payments)
+
+    @action(detail=True, methods=['post'])
+    def add_payment(self, request, pk=None):
+        """🚀 ДОДАВАННЯ ПЛАТЕЖУ З ОЧИЩЕННЯМ КЕШУ"""
+        lead = self.get_object()
+
+        operation_type = request.data.get('operation_type')
+        amount = request.data.get('amount')
+        comment = request.data.get('comment', '')
+
+        if not operation_type or not amount:
+            return Response({"error": "operation_type і amount обов'язкові"}, status=400)
+
+        payment = LeadPaymentOperation.objects.create(
+            lead=lead,
+            operation_type=operation_type,
+            amount=amount,
+            comment=comment
+        )
+
+        # 🚀 ОЧИЩУЄМО КЕШ після додавання
+        cache.delete(f"lead_payments_{lead.id}")
+        cache.delete(f"leads_list_{request.user.id}")
+
+        return Response({
+            "message": "✅ Платіж додано",
+            "payment": {
+                "id": payment.id,
+                "type": payment.operation_type,
+                "amount": float(payment.amount),
+                "comment": payment.comment,
+                "created_at": payment.created_at,
+            }
+        }, status=201)
 
     @action(detail=True, methods=['patch'])
     def update_status(self, request, pk=None):
@@ -559,6 +631,10 @@ class LeadViewSet(viewsets.ModelViewSet):
         try:
             lead.status = new_status
             lead.save()
+
+            # 🚀 ОЧИЩУЄМО КЕШ після зміни статусу
+            cache.delete(f"leads_list_{request.user.id}")
+            cache.delete(f"lead_payments_{lead.id}")
 
             if new_status == "on_the_way":
                 LeadPaymentOperation.objects.get_or_create(
@@ -671,6 +747,12 @@ def all_payments(request):
     client_id = request.GET.get("client_id")
     op_type = request.GET.get("type")
 
+    # 🚀 ОПТИМІЗАЦІЯ: Кешування платежів
+    cache_key = f"payments_{lead_id}_{client_id}_{op_type}"
+    cached_result = cache.get(cache_key)
+    if cached_result:
+        return Response(cached_result)
+
     # 🚀 ОПТИМІЗАЦІЯ: Завантажуємо лід одразу
     payments = LeadPaymentOperation.objects.select_related('lead')
 
@@ -684,7 +766,7 @@ def all_payments(request):
     if op_type:
         payments = payments.filter(operation_type=op_type)
 
-    return Response([
+    result = [
         {
             "id": p.id,
             "lead_id": p.lead_id,
@@ -693,22 +775,54 @@ def all_payments(request):
             "comment": p.comment,
             "created_at": p.created_at,
         } for p in payments.order_by("-created_at")
-    ])
+    ]
+
+    # Кешуємо на 2 хвилини
+    cache.set(cache_key, result, 120)
+    return Response(result)
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_managers(request):
+    # 🚀 ОПТИМІЗАЦІЯ: Кешування списку менеджерів
+    cache_key = "managers_list"
+    cached_result = cache.get(cache_key)
+    if cached_result:
+        return Response(cached_result)
+
     # 🚀 ОПТИМІЗАЦІЯ: Завантажуємо user дані одразу
     managers = CustomUser.objects.select_related('user').filter(interface_type='accountant')
     serializer = ManagerSerializer(managers, many=True)
+
+    # Кешуємо на 10 хвилин (менеджери рідко змінюються)
+    cache.set(cache_key, serializer.data, 600)
     return Response(serializer.data)
 
 
 class ManagerViewSet(viewsets.ModelViewSet):
+    # 🚀 МАКСИМАЛЬНА ОПТИМІЗАЦІЯ: Менеджери з user даними
     queryset = CustomUser.objects.select_related('user').filter(interface_type='accountant')
     serializer_class = ManagerSerializer
     permission_classes = [IsAuthenticated]
+
+    def create(self, request, *args, **kwargs):
+        """🚀 ОЧИЩЕННЯ КЕШУ після створення менеджера"""
+        response = super().create(request, *args, **kwargs)
+        cache.delete("managers_list")
+        return response
+
+    def update(self, request, *args, **kwargs):
+        """🚀 ОЧИЩЕННЯ КЕШУ після оновлення менеджера"""
+        response = super().update(request, *args, **kwargs)
+        cache.delete("managers_list")
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        """🚀 ОЧИЩЕННЯ КЕШУ після видалення менеджера"""
+        response = super().destroy(request, *args, **kwargs)
+        cache.delete("managers_list")
+        return response
 
 
 class CreateLeadView(APIView):
@@ -718,6 +832,10 @@ class CreateLeadView(APIView):
         serializer = LeadSerializer(data=request.data)
         if serializer.is_valid():
             lead = serializer.save()
+
+            # 🚀 ОЧИЩУЄМО КЕШ після створення ліда
+            cache.delete(f"leads_list_{request.user.id}")
+
             return Response({
                 "lead_id": lead.id,
                 "status": lead.status,
