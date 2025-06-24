@@ -24,6 +24,9 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
 ]
 
+DOMAIN = "https://nashcrm.onrender.com"
+
+
 # 🚀 НАЛАШТУВАННЯ REST API (БЕЗ ПАГІНАЦІЇ!)
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
