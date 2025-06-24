@@ -214,7 +214,7 @@ def leads_report(request):
     }
 
     # Кешуємо на 5 хвилин
-    cache.set(cache_key, result, 300)
+    cache.set(cache_key, result, 5)
     return Response(result)
 
 
@@ -479,7 +479,7 @@ def funnel_data(request):
     }
 
     # Кешуємо на 5 хвилин
-    cache.set(cache_key, result, 300)
+    cache.set(cache_key, result, 5)
     return Response(result)
 
 
@@ -562,7 +562,7 @@ class LeadViewSet(viewsets.ModelViewSet):
                     "created_at": p.created_at,
                 } for p in payments
             ]
-            cache.set(cache_key, cached_payments, 300)  # 5 хвилин
+            cache.set(cache_key, cached_payments, 5)  # 5 хвилин
 
         return Response(cached_payments)
 
