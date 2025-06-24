@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import timedelta
+from datetime import timedelta, datetime
 from django.contrib.auth.models import User
 from django.db import models
 
@@ -12,6 +12,8 @@ def lead_file_upload_path(instance, filename):
     return os.path.join("lead_files", filename)
 
 
+
+
 class CustomUser(models.Model):
     INTERFACE_CHOICES = [
         ('admin', 'Адміністратор'),
@@ -20,6 +22,7 @@ class CustomUser(models.Model):
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, verbose_name="Користувач")
     interface_type = models.CharField(max_length=20, choices=INTERFACE_CHOICES, verbose_name="Тип інтерфейсу")
+    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True, verbose_name="Фото")
 
     def __str__(self):
         return f"{self.user.username} ({self.get_interface_type_display()})"
@@ -27,12 +30,10 @@ class CustomUser(models.Model):
     class Meta:
         verbose_name = "Користувач інтерфейсу"
         verbose_name_plural = "Користувачі інтерфейсу"
-        # 🚀 ІНДЕКСИ для швидкого пошуку менеджерів
         indexes = [
             models.Index(fields=['interface_type']),
             models.Index(fields=['user', 'interface_type']),
         ]
-
 class LeadFile(models.Model):
     lead = models.ForeignKey("Lead", related_name="uploaded_files", on_delete=models.CASCADE)
     file = models.FileField(upload_to=lead_file_upload_path)

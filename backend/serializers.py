@@ -1,3 +1,4 @@
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -65,6 +66,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 
+User = get_user_model()
+
 class ManagerSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username')
     first_name = serializers.CharField(source='user.first_name')
@@ -73,12 +76,21 @@ class ManagerSerializer(serializers.ModelSerializer):
     is_active = serializers.BooleanField(source='user.is_active')
     password = serializers.CharField(source='user.password', write_only=True, required=False)
 
+    avatar = serializers.ImageField(required=False, allow_null=True)
+    avatar_url = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomUser
         fields = [
             'id', 'username', 'first_name', 'last_name', 'email', 'is_active',
-            'interface_type', 'password'
+            'interface_type', 'avatar', 'avatar_url', 'password'
         ]
+
+    def get_avatar_url(self, obj):
+        request = self.context.get('request')
+        if obj.avatar and hasattr(obj.avatar, 'url'):
+            return request.build_absolute_uri(obj.avatar.url)
+        return None
 
     def create(self, validated_data):
         user_data = validated_data.pop('user')
@@ -106,3 +118,7 @@ class ManagerSerializer(serializers.ModelSerializer):
 
 
 
+class CustomUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ['id', 'user', 'interface_type', 'avatar']

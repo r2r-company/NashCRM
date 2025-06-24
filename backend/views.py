@@ -22,6 +22,7 @@ from backend.models import CustomUser, Lead, Client, LeadPaymentOperation, LeadF
 from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer, \
     ManagerSerializer
 from backend.services.lead_creation_service import create_lead_with_logic
+from rest_framework.parsers import MultiPartParser, FormParser
 
 
 @api_view(['GET'])
@@ -805,6 +806,13 @@ class ManagerViewSet(viewsets.ModelViewSet):
     queryset = CustomUser.objects.select_related('user').filter(interface_type='accountant')
     serializer_class = ManagerSerializer
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_serializer_context(self):
+        """Додаємо request в контекст — потрібно для avatar_url"""
+        context = super().get_serializer_context()
+        context.update({"request": self.request})
+        return context
 
     def create(self, request, *args, **kwargs):
         """🚀 ОЧИЩЕННЯ КЕШУ після створення менеджера"""
