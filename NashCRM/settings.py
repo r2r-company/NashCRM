@@ -52,7 +52,7 @@ CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
         'LOCATION': 'nashcrm-cache',
-        'TIMEOUT': 300,  # 5 хвилин
+        'TIMEOUT': 3,  # 5 хвилин
         'OPTIONS': {
             'MAX_ENTRIES': 1000,
             'CULL_FREQUENCY': 3,
