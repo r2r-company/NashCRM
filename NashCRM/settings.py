@@ -1,6 +1,6 @@
 """
 Django settings for NashCRM project.
-ОПТИМІЗОВАНО для швидкодії БЕЗ пагінації
+ОПТИМІЗОВАНО для роботи бухгалтера - актуальні дані в реальному часі
 """
 import os
 from pathlib import Path
@@ -26,7 +26,6 @@ ALLOWED_HOSTS = [
 
 DOMAIN = "https://nashcrm.onrender.com"
 
-
 # 🚀 НАЛАШТУВАННЯ REST API (БЕЗ ПАГІНАЦІЇ!)
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -47,17 +46,45 @@ REST_FRAMEWORK = {
     ],
 }
 
-# 🚀 КЕШУВАННЯ для швидкодії
+# 🚀 РОЗУМНЕ КЕШУВАННЯ для бухгалтерської роботи
+# Як професійний бухгалтер потребує актуальних даних
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'nashcrm-cache',
-        'TIMEOUT': 3,  # 5 хвилин
+        'LOCATION': 'nashcrm-realtime-cache',
+        'TIMEOUT': 30,  # 🚀 СКОРОЧУЄМО до 30 секунд замість 5 хвилин
         'OPTIONS': {
-            'MAX_ENTRIES': 1000,
+            'MAX_ENTRIES': 2000,  # Збільшуємо кількість записів
+            'CULL_FREQUENCY': 4,  # Частіше очищуємо старі записи
+        }
+    },
+    # 🚀 ДОДАТКОВИЙ КЕШ для статичних даних (адреси, менеджери)
+    'static_data': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'nashcrm-static-cache',
+        'TIMEOUT': 600,  # 10 хвилин для статичних даних
+        'OPTIONS': {
+            'MAX_ENTRIES': 500,
             'CULL_FREQUENCY': 3,
         }
     }
+}
+
+# 🚀 КОНФІГУРАЦІЯ КЕШУ ДЛЯ РІЗНИХ ТИПІВ ДАНИХ
+CACHE_TIMEOUTS = {
+    # Фінансові дані - мінімальний кеш
+    'funnel': 30,           # 30 секунд
+    'payments': 60,         # 1 хвилина
+    'reports': 60,          # 1 хвилина
+    'lead_status': 0,       # БЕЗ КЕШУ! (найважливіше)
+
+    # Довідкові дані - помірний кеш
+    'managers': 120,        # 2 хвилини
+    'clients': 30,          # 30 секунд
+
+    # Статичні дані - довгий кеш
+    'geocoding': 86400,     # 1 день
+    'settings': 3600,       # 1 година
 }
 
 # Application definition
@@ -93,10 +120,10 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 ]
 
-# 🚀 ОПТИМІЗОВАНИЙ MIDDLEWARE
+# 🚀 ОПТИМІЗОВАНИЙ MIDDLEWARE для бухгалтерської роботи
 MIDDLEWARE = [
-    # 🚀 КЕШ (швидкість)
-    'django.middleware.cache.UpdateCacheMiddleware',
+    # 🚀 СЕЛЕКТИВНИЙ КЕШ тільки для статичних сторінок
+    # 'django.middleware.cache.UpdateCacheMiddleware',  # ВИМКНЕНО для актуальних даних
 
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -107,8 +134,8 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 
-    # 🚀 КЕШ (кінець pipeline)
-    'django.middleware.cache.FetchFromCacheMiddleware',
+    # 🚀 СЕЛЕКТИВНИЙ КЕШ
+    # 'django.middleware.cache.FetchFromCacheMiddleware',  # ВИМКНЕНО
 ]
 
 ROOT_URLCONF = 'NashCRM.urls'
@@ -130,20 +157,21 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'NashCRM.wsgi.application'
 
-# 🚀 ОПТИМІЗОВАНА БАЗА ДАНИХ
+# 🚀 ОПТИМІЗОВАНА БАЗА ДАНИХ для бухгалтерської роботи
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
-        # 🚀 SQLite оптимізація
+        # 🚀 SQLite оптимізація для частих читань/записів
         'OPTIONS': {
             'timeout': 30,
             'init_command': '''
                 PRAGMA journal_mode=WAL;
                 PRAGMA synchronous=NORMAL;
-                PRAGMA cache_size=1000;
+                PRAGMA cache_size=2000;
                 PRAGMA temp_store=MEMORY;
-                PRAGMA mmap_size=134217728;
+                PRAGMA mmap_size=268435456;
+                PRAGMA optimize;
             ''',
         },
         'TEST': {
@@ -152,9 +180,10 @@ DATABASES = {
     }
 }
 
-# 🚀 НАЛАШТУВАННЯ КЕШУ для сесій і DB
-SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
-SESSION_CACHE_ALIAS = 'default'
+# 🚀 НАЛАШТУВАННЯ СЕСІЙ без агресивного кешування
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'  # Тільки БД
+SESSION_COOKIE_AGE = 86400  # 1 день
+SESSION_SAVE_EVERY_REQUEST = False  # Економимо записи в БД
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -192,40 +221,75 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# 🚀 ЛОГУВАННЯ для відстеження швидкодії
+# 🚀 ДЕТАЛЬНЕ ЛОГУВАННЯ для контролю швидкодії
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
+            'formatter': 'simple',
         },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'django.log',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
     },
     'loggers': {
         'django.db.backends': {
             'handlers': ['console'],
-            'level': 'INFO' if DEBUG else 'WARNING',
+            'level': 'WARNING' if not DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'backend.views': {
+            'handlers': ['console', 'file'] if DEBUG else ['file'],
+            'level': 'INFO',
+            'propagate': False,
         },
     },
 }
 
+# 🚀 СТВОРЮЄМО ПАПКУ ДЛЯ ЛОГІВ
+os.makedirs(BASE_DIR / 'logs', exist_ok=True)
+
 def dashboard_callback(request, context):
-    context.update({"sample": "example"})
+    """Додаткова інформація для дашборду"""
+    context.update({
+        "cache_status": "Оптимізовано для бухгалтерії",
+        "realtime_data": True
+    })
     return context
 
 def environment_callback(request):
-    return
+    return "PRODUCTION" if not DEBUG else "DEVELOPMENT"
 
 def badge_callback(request):
-    return 3
+    # Показуємо кількість активних лідів
+    from backend.models import Lead
+    return Lead.objects.filter(status__in=['queued', 'in_work']).count()
 
 def permission_callback(request):
-    return request.user.has_perm("sample_app.change_model")
+    return request.user.has_perm("backend.change_lead")
 
 UNFOLD = {
-    "SITE_TITLE": "Custom suffix in <title> tag",
-    "SITE_HEADER": "Appears in sidebar at the top",
-    "SITE_SUBHEADER": "Appears under SITE_HEADER",
+    "SITE_TITLE": "NashCRM - Система обліку",
+    "SITE_HEADER": "CRM для професійного обліку",
+    "SITE_SUBHEADER": "Актуальні дані в реальному часі",
 
     "SITE_URL": "/",
     "SITE_ICON": {
@@ -236,7 +300,7 @@ UNFOLD = {
         "light": lambda request: static("backend/img/crm.png"),
         "dark": lambda request: static("backend/img/crm.png"),
     },
-    "SITE_SYMBOL": "speed",
+    "SITE_SYMBOL": "account_balance",  # Іконка бухгалтерії
     "SITE_FAVICONS": [
         {
             "rel": "icon",
@@ -249,12 +313,12 @@ UNFOLD = {
     "SHOW_VIEW_ON_SITE": True,
     "SHOW_BACK_BUTTON": False,
     "ENVIRONMENT": environment_callback,
-    "ENVIRONMENT_TITLE_PREFIX": environment_callback,
+    "ENVIRONMENT_TITLE_PREFIX": lambda request: "📊 " if not DEBUG else "🔧 ",
     "DASHBOARD_CALLBACK": dashboard_callback,
     "THEME": "dark",
     "LOGIN": {
         "image": lambda request: static("sample/login-bg.jpg"),
-        "redirect_after": lambda request: reverse_lazy("admin:APP_MODEL_changelist"),
+        "redirect_after": lambda request: reverse_lazy("admin:backend_lead_changelist"),
     },
     "STYLES": [
         lambda request: static("backend/css/style.css"),
@@ -278,17 +342,17 @@ UNFOLD = {
             "950": "3, 7, 18",
         },
         "primary": {
-            "50": "250, 245, 255",
-            "100": "243, 232, 255",
-            "200": "233, 213, 255",
-            "300": "216, 180, 254",
-            "400": "192, 132, 252",
-            "500": "168, 85, 247",
-            "600": "147, 51, 234",
-            "700": "126, 34, 206",
-            "800": "107, 33, 168",
-            "900": "88, 28, 135",
-            "950": "59, 7, 100",
+            "50": "240, 253, 244",
+            "100": "220, 252, 231",
+            "200": "187, 247, 208",
+            "300": "134, 239, 172",
+            "400": "74, 222, 128",
+            "500": "34, 197, 94",   # Зелений для бухгалтерії
+            "600": "22, 163, 74",
+            "700": "21, 128, 61",
+            "800": "22, 101, 52",
+            "900": "20, 83, 45",
+            "950": "5, 46, 22",
         },
         "font": {
             "subtle-light": "var(--color-base-500)",
@@ -312,33 +376,40 @@ UNFOLD = {
         "show_all_applications": False,
         "navigation": [
             {
-                "title": _("Продажі"),
+                "title": _("💰 Фінансовий облік"),
                 "separator": True,
                 "items": [
                     {
-                        "title": "Ліди",
+                        "title": "📋 Ліди",
                         "icon": "shopping_cart",
                         "link": reverse_lazy("admin:backend_lead_changelist"),
+                        "badge": badge_callback,
                     },
                     {
-                        "title": "Фінансові операції",
+                        "title": "💳 Фінансові операції",
                         "icon": "payments",
                         "link": reverse_lazy("admin:backend_leadpaymentoperation_changelist"),
                     },
                     {
-                        "title": "Клієнти",
+                        "title": "👥 Клієнти",
                         "icon": "person",
                         "link": reverse_lazy("admin:backend_client_changelist"),
                     },
                     {
-                        "title": "Email налаштування",
-                        "icon": "email",
-                        "link": reverse_lazy("admin:backend_emailintegrationsettings_changelist"),
-                    },
-                    {
-                        "title": "Звіт по лідах",
+                        "title": "📊 Звіт по лідах",
                         "icon": "bar_chart",
                         "link": reverse_lazy("admin_leads_report"),
+                    },
+                ],
+            },
+            {
+                "title": _("⚙️ Налаштування"),
+                "separator": True,
+                "items": [
+                    {
+                        "title": "📧 Email налаштування",
+                        "icon": "email",
+                        "link": reverse_lazy("admin:backend_emailintegrationsettings_changelist"),
                     },
                 ],
             },
@@ -347,11 +418,17 @@ UNFOLD = {
     "TABS": [
         {
             "models": [
-                "app_label.model_name_in_lowercase",
+                "backend.lead",
+                "backend.leadpaymentoperation",
+                "backend.client",
             ],
             "items": [
                 {
-                    "title": _("Your custom title"),
+                    "title": _("📊 Фінансовий аналіз"),
+                    "link": reverse_lazy("admin_leads_report"),
+                },
+                {
+                    "title": _("📋 Всі ліди"),
                     "link": reverse_lazy("admin:backend_lead_changelist"),
                 },
             ],
@@ -392,3 +469,13 @@ CSRF_TRUSTED_ORIGINS = [
     "https://nash-web-crm.vercel.app",
     "https://nashcrm.onrender.com",
 ]
+
+# 🚀 ДОДАТКОВІ НАЛАШТУВАННЯ ДЛЯ БУХГАЛТЕРСЬКОЇ РОБОТИ
+# Автоматичне збереження змін кожні 30 секунд
+AUTOSAVE_INTERVAL = 30
+
+# Перевірка актуальності даних
+DATA_FRESHNESS_CHECK = True
+
+# Сповіщення про зміни в фінансах
+FINANCIAL_ALERTS = True
