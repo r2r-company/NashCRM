@@ -1,3 +1,5 @@
+# backend/services/mail_lead_importer.py - ПОКРАЩЕНА ВЕРСІЯ
+
 import imaplib
 import email
 from email.header import decode_header
@@ -12,16 +14,11 @@ from backend.ws_notify import notify_lead_created
 
 def normalize_phone(phone: str) -> str:
     """Нормалізує номер телефону до стандартного формату"""
-    # Видаляємо всі символи крім цифр
     digits = re.sub(r'\D', '', phone)
-
-    # Якщо номер починається з 0 (український формат)
     if digits.startswith("0"):
         digits = "38" + digits
-    # Якщо номер 10 цифр без коду країни
     elif not digits.startswith("38") and len(digits) == 10:
         digits = "38" + digits
-
     return digits
 
 
@@ -33,12 +30,82 @@ def parse_email_body(msg) -> str:
     return ""
 
 
+def is_lead_email(text: str, subject: str = "", sender: str = "") -> bool:
+    """
+    🔍 РОЗУМНА ПЕРЕВІРКА - чи є email справжнім лідом
+    """
+
+    # 1. Перевіряємо наявність ключових слів лідів в темі
+    lead_subject_keywords = [
+        'new lead', 'form submission', 'contact form', 'заявка', 'форма',
+        'lead id', 'form id', 'заявление', 'запрос', 'inquiry'
+    ]
+
+    subject_lower = subject.lower()
+    for keyword in lead_subject_keywords:
+        if keyword in subject_lower:
+            print(f"✅ Знайдено ключове слово в темі: '{keyword}'")
+            return True
+
+    # 2. Перевіряємо структуру ліда в тексті
+    lead_patterns = [
+        r'\*\*form_id:\*\*',  # **form_id:**
+        r'\*form_id:\*',  # *form_id:*
+        r'form_id\s*:',  # form_id:
+        r'\*\*Lead Id:\*\*',  # **Lead Id:**
+        r'Lead Id\s*:',  # Lead Id:
+        r'\*\*Name:\*\*',  # **Name:**
+        r'Name\s*:',  # Name:
+        r'\*\*Phone Number:\*\*',  # **Phone Number:**
+        r'Phone Number\s*:',  # Phone Number:
+    ]
+
+    pattern_matches = 0
+    for pattern in lead_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            pattern_matches += 1
+
+    # Якщо знайдено 3+ патернів - це лід
+    if pattern_matches >= 3:
+        print(f"✅ Знайдено {pattern_matches} патернів ліда")
+        return True
+
+    # 3. Перевіряємо виключення - маркетингові листи
+    marketing_keywords = [
+        'unsubscribe', 'відписатися', 'premium video', 'newsletter',
+        'Elliott Wave', 'investment', 'trading', 'market analysis',
+        'promotional', 'discount', 'sale', 'offer expires'
+    ]
+
+    text_lower = text.lower()
+    marketing_found = []
+    for keyword in marketing_keywords:
+        if keyword.lower() in text_lower:
+            marketing_found.append(keyword)
+
+    if marketing_found:
+        print(f"❌ Виявлено маркетинговий контент: {marketing_found}")
+        return False
+
+    # 4. Перевіряємо відправника
+    suspicious_senders = [
+        'noreply', 'no-reply', 'newsletter', 'marketing', 'promo',
+        'elliottwave', 'notifications', 'updates'
+    ]
+
+    sender_lower = sender.lower()
+    for suspicious in suspicious_senders:
+        if suspicious in sender_lower:
+            print(f"❌ Підозрілий відправник: '{suspicious}' в '{sender}'")
+            return False
+
+    print(f"⚠️ Невизначений тип email - не схоже на лід")
+    return False
+
+
 def extract_lead_data(text: str) -> dict:
     """
-    Парсить структуровані дані з email листа. Підтримує формати:
-    - **form_id:** value (подвійні зірочки)
-    - *form_id:* value (одинарні зірочки)
-    - form_id: value (без зірочок)
+    Парсить структуровані дані з email листа лише якщо це справжній лід
     """
 
     def extract_field(label: str, text: str) -> str:
@@ -74,7 +141,6 @@ def extract_lead_data(text: str) -> dict:
 
     if missing_fields:
         print(f"❌ Відсутні обов'язкові поля: {', '.join(missing_fields)}")
-        print(f"📄 Текст для аналізу:\n{text[:500]}...")  # Виводимо початок тексту для діагностики
         return None
 
     # Витягуємо основні дані
@@ -116,16 +182,17 @@ def extract_lead_data(text: str) -> dict:
     return {
         "full_name": name,
         "phone": phone,
-        "email": "",  # В даному форматі email не передається
+        "email": "",
         "description": "\n".join(filter(None, description_parts)),
         "source": "email",
         "price": 0,
-        "delivery_number": lead_id,  # Використовуємо Lead Id як номер доставки
+        "delivery_number": lead_id,
+        "order_number": form_id
     }
 
 
 def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None):
-    """Завантажує email листи та створює ліди"""
+    """Завантажує email листи та створює ліди з розумною фільтрацією"""
     if not settings_obj:
         print("❌ Не передано settings_obj")
         return
@@ -134,16 +201,12 @@ def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None
     EMAIL_PASS = settings_obj.app_password
     IMAP_HOST = settings_obj.imap_host
     FOLDER = settings_obj.folder
-    # Ігноруємо перевірку ключових слів - обробляємо всі листи
-    # KEYWORDS = [k.strip().lower() for k in settings_obj.allowed_subject_keyword.split(",") if k.strip()]
-    KEYWORDS = []  # Порожній список - не перевіряємо ключові слова
 
     print(f"📧 Налаштування:")
     print(f"   - Email: {EMAIL_USER}")
     print(f"   - IMAP: {IMAP_HOST}")
     print(f"   - Папка: {FOLDER}")
-    print(f"   - Приймаємо листи від: ВСІХ відправників")
-    print(f"   - Ключові слова в темі: {KEYWORDS if KEYWORDS else 'НЕ ПЕРЕВІРЯЄМО'}")
+    print(f"   - Розумна фільтрація: ✅ УВІМКНЕНА")
 
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
@@ -167,6 +230,7 @@ def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None
         processed_count = 0
         created_count = 0
         skipped_count = 0
+        filtered_count = 0  # Нова метрика - відфільтровані
 
         for num in email_ids:
             try:
@@ -182,21 +246,25 @@ def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None
                 subject_raw, encoding = decode_header(msg["Subject"])[0]
                 subject = subject_raw.decode(encoding or 'utf-8') if isinstance(subject_raw, bytes) else subject_raw
 
-                print(f"\n📨 Обробляємо лист від: {from_email}")
+                print(f"\n📨 Обробляємо лист:")
+                print(f"   Від: {from_email}")
                 print(f"   Тема: {subject}")
-
-                # НЕ ПЕРЕВІРЯЄМО ні відправника, ні ключові слова
-                # Приймаємо ВСІ листи для обробки
-                print(f"✅ Приймаємо лист для обробки")
 
                 # Парсимо тіло листа
                 body = parse_email_body(msg)
-                print(f"📄 Тіло листа (перші 200 символів): {body[:200]}...")
+
+                # 🔍 РОЗУМНА ПЕРЕВІРКА - чи є це лідом?
+                if not is_lead_email(body, subject, from_email):
+                    print(f"🚫 Email не є лідом - пропускаємо")
+                    filtered_count += 1
+                    continue
+
+                print(f"✅ Email розпізнано як лід - обробляємо")
 
                 data = extract_lead_data(body)
 
                 if not data:
-                    print(f"⚠️ Лист не відповідає структурі ліда")
+                    print(f"⚠️ Лист є лідом, але структура даних невірна")
                     skipped_count += 1
                     continue
 
@@ -214,7 +282,6 @@ def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None
                 name = data['full_name']
 
                 try:
-                    # Шукаємо існуючого клієнта по номеру
                     client = Client.objects.get(phone=phone)
                     print(f"📞 Знайдено існуючого клієнта: {client.full_name} ({phone})")
 
@@ -225,11 +292,9 @@ def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None
                         client.save()
                         print(f"👤 Оновлено ім'я клієнта: '{old_name}' → '{name}'")
 
-                    # Використовуємо існуючого менеджера клієнта
                     data['assigned_to'] = client.assigned_to
 
                 except Client.DoesNotExist:
-                    # Створюємо нового клієнта
                     client = Client.objects.create(
                         phone=phone,
                         full_name=name,
@@ -257,9 +322,10 @@ def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None
         mail.logout()
         print(f"\n📊 Обробка завершена:")
         print(f"   - Всього листів знайдено: {len(email_ids)}")
-        print(f"   - Листів оброблено: {processed_count}")
-        print(f"   - Лідів створено: {created_count}")
-        print(f"   - Листів пропущено: {skipped_count}")
+        print(f"   - 🚫 Відфільтровано (не ліди): {filtered_count}")
+        print(f"   - 📋 Листів оброблено як ліди: {processed_count}")
+        print(f"   - ✅ Лідів створено: {created_count}")
+        print(f"   - ⚠️ Пропущено (дублікати/помилки): {skipped_count}")
 
     except Exception as e:
         print(f"❌ Помилка підключення до email: {e}")
@@ -268,9 +334,43 @@ def fetch_emails_and_create_leads(start_date: datetime = None, settings_obj=None
 
 
 def fetch_all_emails_and_create_leads(start_date: datetime = None):
-    """Обробляє всі налаштовані email акаунти"""
+    """Обробляє всі налаштовані email акаунти з розумною фільтрацією"""
     for settings_obj in EmailIntegrationSettings.objects.all():
         print(f"\n{'=' * 60}")
         print(f"📧 Обробляємо акаунт: {settings_obj.name} ({settings_obj.email})")
         print(f"{'=' * 60}")
         fetch_emails_and_create_leads(start_date=start_date, settings_obj=settings_obj)
+
+
+# 🔧 ТЕСТОВА ФУНКЦІЯ ДЛЯ ПЕРЕВІРКИ ФІЛЬТРАЦІЇ
+def test_email_filter():
+    """Тестує роботу фільтра email"""
+
+    # Тест 1: Справжній лід
+    lead_text = """
+    **form_id:** 12345
+    **Lead Id:** LEAD_67890
+    **Name:** Іван Петренко
+    **Phone Number:** +38067123456
+    **Create Time:** 2024-06-25 10:30:00
+    """
+
+    result1 = is_lead_email(lead_text, "New Lead Submission", "forms@company.com")
+    print(f"Тест 1 (справжній лід): {'✅ ПРОЙШОВ' if result1 else '❌ НЕ ПРОЙШОВ'}")
+
+    # Тест 2: Маркетинговий лист
+    marketing_text = """
+    We've unlocked a premium video for you for a limited time…
+    Hi Elliott Waver,
+    Most investors would say that oil prices are governed by supply and demand.
+    Unsubscribe from future emails.
+    """
+
+    result2 = is_lead_email(marketing_text, "Premium Video Unlocked", "noreply@elliottwave.com")
+    print(f"Тест 2 (маркетинг): {'✅ ПРОЙШОВ' if not result2 else '❌ НЕ ПРОЙШОВ'}")
+
+    return result1 and not result2
+
+
+if __name__ == "__main__":
+    test_email_filter()

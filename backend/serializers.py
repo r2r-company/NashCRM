@@ -3,7 +3,8 @@ from django.contrib.auth.models import User
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import Lead, Client, CustomUser, LeadFile
+from .models import Lead, Client, CustomUser, LeadFile, ClientInteraction, ClientTask
+
 
 class LeadFileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -18,11 +19,73 @@ class LeadSerializer(serializers.ModelSerializer):
         model = Lead
         fields = '__all__'
 
+
 class ClientSerializer(serializers.ModelSerializer):
+    assigned_to_name = serializers.CharField(source='assigned_to.username', read_only=True)
+    temperature_display = serializers.CharField(source='get_temperature_display', read_only=True)
+    akb_segment_display = serializers.CharField(source='get_akb_segment_display', read_only=True)
+
+    # Розраховані поля
+    is_akb = serializers.ReadOnlyField()
+    customer_lifetime_value = serializers.ReadOnlyField()
+    risk_of_churn = serializers.ReadOnlyField()
+    next_contact_recommendation = serializers.ReadOnlyField()
+
+    # Статистика
+    recent_interactions_count = serializers.SerializerMethodField()
+    pending_tasks_count = serializers.SerializerMethodField()
+    days_since_last_contact = serializers.SerializerMethodField()
+
     class Meta:
         model = Client
-        fields = '__all__'
+        fields = [
+            # Основні поля
+            'id', 'full_name', 'phone', 'email', 'company_name',
+            'type', 'status', 'assigned_to', 'assigned_to_name',
 
+            # CRM поля
+            'temperature', 'temperature_display', 'akb_segment', 'akb_segment_display',
+            'total_spent', 'avg_check', 'total_orders',
+            'first_purchase_date', 'last_purchase_date', 'last_contact_date',
+
+            # Додаткові поля
+            'lead_source', 'preferred_contact_method', 'country', 'city',
+            'difficulty_rating', 'notes',
+
+            # RFM
+            'rfm_recency', 'rfm_frequency', 'rfm_monetary', 'rfm_score',
+
+            # Розраховані поля
+            'is_akb', 'customer_lifetime_value', 'risk_of_churn',
+            'next_contact_recommendation',
+
+            # Статистика
+            'recent_interactions_count', 'pending_tasks_count',
+            'days_since_last_contact',
+
+            # Дати
+            'created_at', 'updated_at'
+        ]
+
+    def get_recent_interactions_count(self, obj):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        return obj.interactions.filter(
+            created_at__gte=timezone.now() - timedelta(days=30)
+        ).count()
+
+    def get_pending_tasks_count(self, obj):
+        return obj.tasks.filter(
+            status__in=['pending', 'in_progress']
+        ).count()
+
+    def get_days_since_last_contact(self, obj):
+        from django.utils import timezone
+
+        if obj.last_contact_date:
+            return (timezone.now() - obj.last_contact_date).days
+        return None
 
 
 class ExternalLeadSerializer(serializers.ModelSerializer):
@@ -122,3 +185,84 @@ class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = ['id', 'user', 'interface_type', 'avatar']
+
+
+class ClientInteractionSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    client_name = serializers.CharField(source='client.full_name', read_only=True)
+    client_phone = serializers.CharField(source='client.phone', read_only=True)
+
+    class Meta:
+        model = ClientInteraction
+        fields = [
+            'id', 'client', 'client_name', 'client_phone',
+            'interaction_type', 'direction', 'subject', 'description',
+            'outcome', 'created_by', 'created_by_name', 'created_at',
+            'follow_up_date'
+        ]
+        read_only_fields = ['created_by', 'created_at']
+
+
+class ClientTaskSerializer(serializers.ModelSerializer):
+    assigned_to_name = serializers.CharField(source='assigned_to.username', read_only=True)
+    client_name = serializers.CharField(source='client.full_name', read_only=True)
+    client_phone = serializers.CharField(source='client.phone', read_only=True)
+    is_overdue = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClientTask
+        fields = [
+            'id', 'client', 'client_name', 'client_phone',
+            'title', 'description', 'assigned_to', 'assigned_to_name',
+            'priority', 'status', 'due_date', 'created_at',
+            'completed_at', 'is_overdue'
+        ]
+
+    def get_is_overdue(self, obj):
+        from django.utils import timezone
+        return obj.due_date < timezone.now() and obj.status not in ['completed', 'cancelled']
+
+
+# 🔥 КОМПАКТНИЙ СЕРІАЛІЗАТОР ДЛЯ СПИСКІВ
+class ClientCompactSerializer(serializers.ModelSerializer):
+    temperature_display = serializers.CharField(source='get_temperature_display', read_only=True)
+    akb_segment_display = serializers.CharField(source='get_akb_segment_display', read_only=True)
+
+    class Meta:
+        model = Client
+        fields = [
+            'id', 'full_name', 'phone', 'temperature', 'temperature_display',
+            'akb_segment', 'akb_segment_display', 'total_spent', 'total_orders',
+            'last_purchase_date', 'rfm_score'
+        ]
+
+
+# 🔥 СЕРІАЛІЗАТОР ДЛЯ ШВИДКОГО СТВОРЕННЯ ВЗАЄМОДІЇ
+class QuickInteractionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClientInteraction
+        fields = [
+            'client', 'interaction_type', 'direction',
+            'subject', 'description', 'outcome', 'follow_up_date'
+        ]
+
+    def create(self, validated_data):
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+# 🔥 СЕРІАЛІЗАТОР ДЛЯ ЕКСПОРТУ КЛІЄНТІВ
+class ClientExportSerializer(serializers.ModelSerializer):
+    assigned_to_name = serializers.CharField(source='assigned_to.username', read_only=True)
+    temperature_display = serializers.CharField(source='get_temperature_display', read_only=True)
+    akb_segment_display = serializers.CharField(source='get_akb_segment_display', read_only=True)
+
+    class Meta:
+        model = Client
+        fields = [
+            'id', 'full_name', 'phone', 'email', 'company_name',
+            'temperature_display', 'akb_segment_display',
+            'total_spent', 'avg_check', 'total_orders',
+            'first_purchase_date', 'last_purchase_date',
+            'rfm_score', 'assigned_to_name', 'created_at'
+        ]

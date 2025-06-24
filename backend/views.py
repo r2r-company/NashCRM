@@ -22,8 +22,9 @@ from datetime import datetime, timedelta
 
 from NashCRM import settings
 from backend.forms import LeadsReportForm
-from backend.models import CustomUser, Lead, Client, LeadPaymentOperation, LeadFile
-from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer, ManagerSerializer
+from backend.models import CustomUser, Lead, Client, LeadPaymentOperation, LeadFile, ClientInteraction, ClientTask
+from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer, \
+    ManagerSerializer, ClientTaskSerializer, ClientInteractionSerializer
 from backend.services.lead_creation_service import create_lead_with_logic
 from rest_framework.parsers import MultiPartParser, FormParser
 
@@ -139,9 +140,29 @@ class LoginView(APIView):
 
 
 class ClientViewSet(viewsets.ModelViewSet):
+    # 🔥 ОБОВ'ЯЗКОВО ДОДАЄМО queryset та serializer_class
     queryset = Client.objects.select_related('assigned_to').order_by('-created_at')
     serializer_class = ClientSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        # Фільтри
+        temperature = self.request.query_params.get('temperature')
+        akb_segment = self.request.query_params.get('akb_segment')
+        assigned_to = self.request.query_params.get('assigned_to')
+
+        if temperature:
+            queryset = queryset.filter(temperature=temperature)
+        if akb_segment:
+            queryset = queryset.filter(akb_segment=akb_segment)
+        if assigned_to:
+            queryset = queryset.filter(assigned_to=assigned_to)
+
+        return queryset
+
+    # ВСІ ВАШІ ІСНУЮЧІ @action МЕТОДИ ЗАЛИШАЮТЬСЯ:
 
     @action(detail=True, methods=['get'])
     def leads(self, request, pk=None):
@@ -191,6 +212,427 @@ class ClientViewSet(viewsets.ModelViewSet):
             cache.set(cache_key, cached_result, 30)  # 30 секунд
 
         return Response(cached_result)
+
+    # 🔥 НОВІ CRM МЕТОДИ:
+
+    @action(detail=False, methods=['get'])
+    def temperature_stats(self, request):
+        """📊 Статистика по температурі лідів"""
+        stats = Client.objects.values('temperature').annotate(
+            count=Count('id'),
+            total_spent=Sum('total_spent'),
+            avg_check=Avg('avg_check')
+        ).order_by('temperature')
+
+        result = {}
+        for stat in stats:
+            temp = stat['temperature']
+            result[temp] = {
+                'count': stat['count'],
+                'total_spent': float(stat['total_spent'] or 0),
+                'avg_check': float(stat['avg_check'] or 0),
+                'label': dict(Client.TEMPERATURE_CHOICES).get(temp, temp)
+            }
+
+        return Response(result)
+
+    @action(detail=False, methods=['get'])
+    def akb_segments(self, request):
+        """💰 Статистика по сегментам АКБ"""
+        stats = Client.objects.filter(
+            akb_segment__in=['vip', 'premium', 'standard', 'basic']
+        ).values('akb_segment').annotate(
+            count=Count('id'),
+            total_revenue=Sum('total_spent'),
+            avg_ltv=Avg('total_spent')
+        ).order_by('-total_revenue')
+
+        return Response({
+            'segments': list(stats),
+            'total_akb_clients': sum(s['count'] for s in stats),
+            'total_akb_revenue': sum(float(s['total_revenue'] or 0) for s in stats)
+        })
+
+    @action(detail=False, methods=['get'])
+    def rfm_analysis(self, request):
+        """📈 RFM аналіз клієнтів"""
+        # Топ клієнти по RFM
+        top_clients = Client.objects.filter(
+            total_orders__gt=0
+        ).order_by('-total_spent')[:10]
+
+        # Розподіл по RFM сегментах
+        rfm_distribution = {}
+        for client in Client.objects.filter(rfm_score__isnull=False):
+            score = client.rfm_score
+            if score not in rfm_distribution:
+                rfm_distribution[score] = 0
+            rfm_distribution[score] += 1
+
+        return Response({
+            'top_clients': [
+                {
+                    'id': c.id,
+                    'name': c.full_name,
+                    'phone': c.phone,
+                    'total_spent': float(c.total_spent),
+                    'rfm_score': c.rfm_score,
+                    'segment': c.akb_segment
+                }
+                for c in top_clients
+            ],
+            'rfm_distribution': rfm_distribution
+        })
+
+    @action(detail=False, methods=['get'])
+    def churn_risk(self, request):
+        """⚠️ Клієнти з ризиком відтоку"""
+        risky_clients = Client.objects.filter(
+            Q(temperature='sleeping') | Q(rfm_recency__gt=180)
+        ).filter(total_orders__gt=0).order_by('-total_spent')[:20]
+
+        return Response({
+            'risky_clients': [
+                {
+                    'id': c.id,
+                    'name': c.full_name,
+                    'phone': c.phone,
+                    'last_purchase': c.last_purchase_date,
+                    'days_since_purchase': c.rfm_recency,
+                    'total_spent': float(c.total_spent),
+                    'risk_level': c.risk_of_churn,
+                    'recommendation': c.next_contact_recommendation
+                }
+                for c in risky_clients
+            ]
+        })
+
+    @action(detail=False, methods=['get'])
+    def hot_leads(self, request):
+        """🔥 Гарячі ліди для менеджерів"""
+        hot_clients = Client.objects.filter(
+            temperature='hot'
+        ).order_by('-created_at')[:20]
+
+        return Response({
+            'hot_leads': [
+                {
+                    'id': c.id,
+                    'name': c.full_name,
+                    'phone': c.phone,
+                    'assigned_to': c.assigned_to.username if c.assigned_to else None,
+                    'created_at': c.created_at,
+                    'leads_count': Lead.objects.filter(phone=c.phone).count(),
+                    'recommendation': c.next_contact_recommendation
+                }
+                for c in hot_clients
+            ]
+        })
+
+    @action(detail=True, methods=['get'])
+    def client_journey(self, request, pk=None):
+        """🛤️ Подорож клієнта (Customer Journey)"""
+        client = self.get_object()
+
+        # Всі ліди клієнта
+        leads = Lead.objects.filter(phone=client.phone).order_by('created_at')
+
+        # Всі взаємодії (якщо модель існує)
+        try:
+            from backend.models import ClientInteraction
+            interactions = ClientInteraction.objects.filter(
+                client=client
+            ).order_by('created_at')
+        except ImportError:
+            interactions = []
+
+        # Платежі
+        payments = LeadPaymentOperation.objects.filter(
+            lead__phone=client.phone
+        ).order_by('created_at')
+
+        # Створюємо хронологію
+        timeline = []
+
+        for lead in leads:
+            timeline.append({
+                'type': 'lead',
+                'date': lead.created_at,
+                'title': f'Створено лід: {lead.full_name}',
+                'details': {
+                    'status': lead.status,
+                    'price': float(lead.price or 0),
+                    'source': lead.source
+                }
+            })
+
+        for interaction in interactions:
+            timeline.append({
+                'type': 'interaction',
+                'date': interaction.created_at,
+                'title': f'{interaction.get_interaction_type_display()}: {interaction.subject}',
+                'details': {
+                    'outcome': interaction.outcome,
+                    'description': interaction.description
+                }
+            })
+
+        for payment in payments:
+            timeline.append({
+                'type': 'payment',
+                'date': payment.created_at,
+                'title': f'Платіж: {payment.amount} грн',
+                'details': {
+                    'type': payment.operation_type,
+                    'comment': payment.comment
+                }
+            })
+
+        # Сортуємо по даті
+        timeline.sort(key=lambda x: x['date'])
+
+        return Response({
+            'client': {
+                'id': client.id,
+                'name': client.full_name,
+                'phone': client.phone,
+                'temperature': getattr(client, 'temperature', 'cold'),
+                'akb_segment': getattr(client, 'akb_segment', 'new'),
+                'total_spent': float(getattr(client, 'total_spent', 0)),
+                'rfm_score': getattr(client, 'rfm_score', '')
+            },
+            'timeline': timeline,
+            'summary': {
+                'total_leads': leads.count(),
+                'total_interactions': len(interactions),
+                'total_payments': payments.count(),
+                'customer_since': getattr(client, 'first_purchase_date', None),
+                'ltv': float(getattr(client, 'customer_lifetime_value', 0)) if hasattr(client,
+                                                                                       'customer_lifetime_value') else 0
+            }
+        })
+
+    @action(detail=True, methods=['post'])
+    def update_temperature(self, request, pk=None):
+        """🌡️ Ручне оновлення температури клієнта"""
+        client = self.get_object()
+        new_temperature = request.data.get('temperature')
+
+        # Перевіряємо чи поле існує
+        if not hasattr(client, 'temperature'):
+            return Response({
+                'error': 'Поле temperature не існує в моделі Client. Потрібно застосувати міграції.'
+            }, status=400)
+
+        from backend.models import Client
+        if new_temperature not in dict(Client.TEMPERATURE_CHOICES):
+            return Response({
+                'error': 'Неправильна температура'
+            }, status=400)
+
+        old_temperature = client.temperature
+        client.temperature = new_temperature
+        client.save()
+
+        return Response({
+            'message': f'Температура змінена: {old_temperature} → {new_temperature}',
+            'client_id': client.id,
+            'old_temperature': old_temperature,
+            'new_temperature': new_temperature
+        })
+
+    @action(detail=False, methods=['get'])
+    def akb_segments(self, request):
+        """💰 Статистика по сегментам АКБ"""
+        stats = Client.objects.filter(
+            akb_segment__in=['vip', 'premium', 'standard', 'basic']
+        ).values('akb_segment').annotate(
+            count=Count('id'),
+            total_revenue=Sum('total_spent'),
+            avg_ltv=Avg('total_spent')
+        ).order_by('-total_revenue')
+
+        return Response({
+            'segments': list(stats),
+            'total_akb_clients': sum(s['count'] for s in stats),
+            'total_akb_revenue': sum(float(s['total_revenue'] or 0) for s in stats)
+        })
+
+    @action(detail=False, methods=['get'])
+    def rfm_analysis(self, request):
+        """📈 RFM аналіз клієнтів"""
+        # Топ клієнти по RFM
+        top_clients = Client.objects.filter(
+            total_orders__gt=0
+        ).order_by('-total_spent')[:10]
+
+        # Розподіл по RFM сегментах
+        rfm_distribution = {}
+        for client in Client.objects.filter(rfm_score__isnull=False):
+            score = client.rfm_score
+            if score not in rfm_distribution:
+                rfm_distribution[score] = 0
+            rfm_distribution[score] += 1
+
+        return Response({
+            'top_clients': [
+                {
+                    'id': c.id,
+                    'name': c.full_name,
+                    'phone': c.phone,
+                    'total_spent': float(c.total_spent),
+                    'rfm_score': c.rfm_score,
+                    'segment': c.akb_segment
+                }
+                for c in top_clients
+            ],
+            'rfm_distribution': rfm_distribution
+        })
+
+    @action(detail=False, methods=['get'])
+    def churn_risk(self, request):
+        """⚠️ Клієнти з ризиком відтоку"""
+        risky_clients = Client.objects.filter(
+            Q(temperature='sleeping') | Q(rfm_recency__gt=180)
+        ).filter(total_orders__gt=0).order_by('-total_spent')[:20]
+
+        return Response({
+            'risky_clients': [
+                {
+                    'id': c.id,
+                    'name': c.full_name,
+                    'phone': c.phone,
+                    'last_purchase': c.last_purchase_date,
+                    'days_since_purchase': c.rfm_recency,
+                    'total_spent': float(c.total_spent),
+                    'risk_level': c.risk_of_churn,
+                    'recommendation': c.next_contact_recommendation
+                }
+                for c in risky_clients
+            ]
+        })
+
+    @action(detail=False, methods=['get'])
+    def hot_leads(self, request):
+        """🔥 Гарячі ліди для менеджерів"""
+        hot_clients = Client.objects.filter(
+            temperature='hot'
+        ).order_by('-created_at')[:20]
+
+        return Response({
+            'hot_leads': [
+                {
+                    'id': c.id,
+                    'name': c.full_name,
+                    'phone': c.phone,
+                    'assigned_to': c.assigned_to.username if c.assigned_to else None,
+                    'created_at': c.created_at,
+                    'leads_count': Lead.objects.filter(phone=c.phone).count(),
+                    'recommendation': c.next_contact_recommendation
+                }
+                for c in hot_clients
+            ]
+        })
+
+    @action(detail=True, methods=['get'])
+    def client_journey(self, request, pk=None):
+        """🛤️ Подорож клієнта (Customer Journey)"""
+        client = self.get_object()
+
+        # Всі ліди клієнта
+        leads = Lead.objects.filter(phone=client.phone).order_by('created_at')
+
+        # Всі взаємодії
+        interactions = ClientInteraction.objects.filter(
+            client=client
+        ).order_by('created_at')
+
+        # Платежі
+        payments = LeadPaymentOperation.objects.filter(
+            lead__phone=client.phone
+        ).order_by('created_at')
+
+        # Створюємо хронологію
+        timeline = []
+
+        for lead in leads:
+            timeline.append({
+                'type': 'lead',
+                'date': lead.created_at,
+                'title': f'Створено лід: {lead.full_name}',
+                'details': {
+                    'status': lead.status,
+                    'price': float(lead.price or 0),
+                    'source': lead.source
+                }
+            })
+
+        for interaction in interactions:
+            timeline.append({
+                'type': 'interaction',
+                'date': interaction.created_at,
+                'title': f'{interaction.get_interaction_type_display()}: {interaction.subject}',
+                'details': {
+                    'outcome': interaction.outcome,
+                    'description': interaction.description
+                }
+            })
+
+        for payment in payments:
+            timeline.append({
+                'type': 'payment',
+                'date': payment.created_at,
+                'title': f'Платіж: {payment.amount} грн',
+                'details': {
+                    'type': payment.operation_type,
+                    'comment': payment.comment
+                }
+            })
+
+        # Сортуємо по даті
+        timeline.sort(key=lambda x: x['date'])
+
+        return Response({
+            'client': {
+                'id': client.id,
+                'name': client.full_name,
+                'phone': client.phone,
+                'temperature': client.temperature,
+                'akb_segment': client.akb_segment,
+                'total_spent': float(client.total_spent),
+                'rfm_score': client.rfm_score
+            },
+            'timeline': timeline,
+            'summary': {
+                'total_leads': leads.count(),
+                'total_interactions': interactions.count(),
+                'total_payments': payments.count(),
+                'customer_since': client.first_purchase_date,
+                'ltv': float(client.customer_lifetime_value)
+            }
+        })
+
+    @action(detail=True, methods=['post'])
+    def update_temperature(self, request, pk=None):
+        """🌡️ Ручне оновлення температури клієнта"""
+        client = self.get_object()
+        new_temperature = request.data.get('temperature')
+
+        if new_temperature not in dict(Client.TEMPERATURE_CHOICES):
+            return Response({
+                'error': 'Неправильна температура'
+            }, status=400)
+
+        old_temperature = client.temperature
+        client.temperature = new_temperature
+        client.save()
+
+        return Response({
+            'message': f'Температура змінена: {old_temperature} → {new_temperature}',
+            'client_id': client.id,
+            'old_temperature': old_temperature,
+            'new_temperature': new_temperature
+        })
 
 
 # 🚀 ФУНКЦІЯ ПЕРЕВІРКИ ДУБЛІКАТІВ
@@ -1085,3 +1527,354 @@ def check_lead_duplicate(request):
         } if existing_lead else None
     })
 
+
+class ClientInteractionViewSet(viewsets.ModelViewSet):
+    serializer_class = ClientInteractionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = ClientInteraction.objects.select_related(
+            'client', 'created_by'
+        ).order_by('-created_at')
+
+        client_id = self.request.query_params.get('client_id')
+        if client_id:
+            queryset = queryset.filter(client_id=client_id)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+        # Оновлюємо дату останнього контакту з клієнтом
+        client = serializer.instance.client
+        client.last_contact_date = timezone.now()
+        client.save()
+
+
+class ClientTaskViewSet(viewsets.ModelViewSet):
+    serializer_class = ClientTaskSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = ClientTask.objects.select_related(
+            'client', 'assigned_to'
+        ).order_by('due_date')
+
+        # Фільтри
+        client_id = self.request.query_params.get('client_id')
+        status = self.request.query_params.get('status')
+        assigned_to_me = self.request.query_params.get('assigned_to_me')
+
+        if client_id:
+            queryset = queryset.filter(client_id=client_id)
+        if status:
+            queryset = queryset.filter(status=status)
+        if assigned_to_me == 'true':
+            queryset = queryset.filter(assigned_to=self.request.user)
+
+        return queryset
+
+    @action(detail=False, methods=['get'])
+    def my_tasks(self, request):
+        """📋 Мої задачі"""
+        tasks = ClientTask.objects.filter(
+            assigned_to=request.user,
+            status__in=['pending', 'in_progress']
+        ).order_by('due_date')[:10]
+
+        return Response({
+            'my_tasks': [
+                {
+                    'id': task.id,
+                    'title': task.title,
+                    'client_name': task.client.full_name,
+                    'client_phone': task.client.phone,
+                    'priority': task.priority,
+                    'due_date': task.due_date,
+                    'overdue': task.due_date < timezone.now()
+                }
+                for task in tasks
+            ]
+        })
+
+    @action(detail=False, methods=['get'])
+    def overdue_tasks(self, request):
+        """⏰ Прострочені задачі"""
+        overdue = ClientTask.objects.filter(
+            due_date__lt=timezone.now(),
+            status__in=['pending', 'in_progress']
+        ).order_by('due_date')
+
+        return Response({
+            'overdue_tasks': [
+                {
+                    'id': task.id,
+                    'title': task.title,
+                    'client_name': task.client.full_name,
+                    'assigned_to': task.assigned_to.username,
+                    'due_date': task.due_date,
+                    'days_overdue': (timezone.now() - task.due_date).days
+                }
+                for task in overdue
+            ]
+        })
+
+
+# 🔥 НОВИЙ API ДЛЯ CRM ДАШБОРДУ
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def crm_dashboard(request):
+    """🎯 Головний CRM дашборд"""
+
+    # Кешування дашборду на 5 хвилин
+    cache_key = f"crm_dashboard_{request.user.id}"
+    cached_result = cache.get(cache_key)
+    if cached_result:
+        return Response(cached_result)
+
+    # Статистика по клієнтах
+    clients_stats = Client.objects.aggregate(
+        total_clients=Count('id'),
+        akb_clients=Count('id', filter=Q(total_orders__gt=0)),
+        cold_leads=Count('id', filter=Q(temperature='cold')),
+        warm_leads=Count('id', filter=Q(temperature='warm')),
+        hot_leads=Count('id', filter=Q(temperature='hot')),
+        sleeping_clients=Count('id', filter=Q(temperature='sleeping')),
+        total_revenue=Sum('total_spent'),
+        avg_ltv=Avg('total_spent', filter=Q(total_orders__gt=0))
+    )
+
+    # ТОП клієнти
+    top_clients = Client.objects.filter(
+        total_orders__gt=0
+    ).order_by('-total_spent')[:5]
+
+    # Ризикові клієнти
+    churn_risk_clients = Client.objects.filter(
+        Q(temperature='sleeping') | Q(rfm_recency__gt=180),
+        total_orders__gt=0
+    ).count()
+
+    # Задачі що потребують уваги
+    my_urgent_tasks = ClientTask.objects.filter(
+        assigned_to=request.user,
+        status__in=['pending', 'in_progress'],
+        due_date__lte=timezone.now() + timedelta(days=1)
+    ).count()
+
+    # Конверсія по температурі
+    temperature_conversion = {}
+    for temp_code, temp_name in Client.TEMPERATURE_CHOICES:
+        clients_count = Client.objects.filter(temperature=temp_code).count()
+        if clients_count > 0:
+            converted = Client.objects.filter(
+                temperature=temp_code,
+                total_orders__gt=0
+            ).count()
+            temperature_conversion[temp_code] = {
+                'name': temp_name,
+                'total': clients_count,
+                'converted': converted,
+                'conversion_rate': round((converted / clients_count) * 100, 1)
+            }
+
+    # Недавні взаємодії
+    recent_interactions = ClientInteraction.objects.select_related(
+        'client', 'created_by'
+    ).order_by('-created_at')[:5]
+
+    result = {
+        'summary': {
+            'total_clients': clients_stats['total_clients'],
+            'akb_clients': clients_stats['akb_clients'],
+            'hot_leads': clients_stats['hot_leads'],
+            'churn_risk': churn_risk_clients,
+            'total_revenue': float(clients_stats['total_revenue'] or 0),
+            'avg_ltv': float(clients_stats['avg_ltv'] or 0),
+            'urgent_tasks': my_urgent_tasks
+        },
+        'temperature_breakdown': {
+            'cold': clients_stats['cold_leads'],
+            'warm': clients_stats['warm_leads'],
+            'hot': clients_stats['hot_leads'],
+            'sleeping': clients_stats['sleeping_clients']
+        },
+        'temperature_conversion': temperature_conversion,
+        'top_clients': [
+            {
+                'id': c.id,
+                'name': c.full_name,
+                'total_spent': float(c.total_spent),
+                'segment': c.akb_segment,
+                'rfm_score': c.rfm_score
+            }
+            for c in top_clients
+        ],
+        'recent_interactions': [
+            {
+                'id': i.id,
+                'client_name': i.client.full_name,
+                'type': i.interaction_type,
+                'subject': i.subject,
+                'outcome': i.outcome,
+                'created_at': i.created_at,
+                'created_by': i.created_by.username
+            }
+            for i in recent_interactions
+        ]
+    }
+
+    cache.set(cache_key, result, 300)  # 5 хвилин
+    return Response(result)
+
+
+# 🔥 МАСОВЕ ОНОВЛЕННЯ МЕТРИК КЛІЄНТІВ
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_all_client_metrics(request):
+    """🔄 Масове оновлення метрик всіх клієнтів"""
+    if not request.user.is_staff:
+        return Response({
+            'error': 'Тільки адміністратори можуть запускати масове оновлення'
+        }, status=403)
+
+    updated_count = 0
+    errors = []
+
+    for client in Client.objects.all():
+        try:
+            client.update_client_metrics()
+            updated_count += 1
+        except Exception as e:
+            errors.append(f"Клієнт {client.id}: {str(e)}")
+
+    return Response({
+        'message': f'Оновлено метрики для {updated_count} клієнтів',
+        'updated_count': updated_count,
+        'errors': errors[:10]  # Показуємо перші 10 помилок
+    })
+
+
+# 🔥 АВТОМАТИЧНЕ СТВОРЕННЯ ЗАДАЧ ПО КЛІЄНТАХ
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_follow_up_tasks(request):
+    """📅 Автоматичне створення задач для follow-up"""
+
+    # Клієнти що потребують реактивації (сплячі)
+    sleeping_clients = Client.objects.filter(
+        temperature='sleeping',
+        total_orders__gt=0
+    ).exclude(
+        tasks__status__in=['pending', 'in_progress'],
+        tasks__title__icontains='реактивація'
+    )
+
+    # Гарячі ліди що потребують уваги
+    hot_leads = Client.objects.filter(
+        temperature='hot'
+    ).exclude(
+        tasks__status__in=['pending', 'in_progress'],
+        tasks__title__icontains='контакт'
+    )
+
+    created_tasks = []
+
+    # Створюємо задачі для сплячих клієнтів
+    for client in sleeping_clients:
+        task = ClientTask.objects.create(
+            client=client,
+            title=f'Реактивація клієнта: {client.full_name}',
+            description=f'Клієнт не купував {client.rfm_recency} днів. Загальна сума покупок: {client.total_spent} грн.',
+            assigned_to=client.assigned_to or request.user,
+            priority='medium',
+            due_date=timezone.now() + timedelta(days=3)
+        )
+        created_tasks.append(task)
+
+    # Створюємо задачі для гарячих лідів
+    for client in hot_leads:
+        task = ClientTask.objects.create(
+            client=client,
+            title=f'ТЕРМІНОВИЙ контакт: {client.full_name}',
+            description=f'Гарячий лід! {client.next_contact_recommendation}',
+            assigned_to=client.assigned_to or request.user,
+            priority='urgent',
+            due_date=timezone.now() + timedelta(hours=24)
+        )
+        created_tasks.append(task)
+
+    return Response({
+        'message': f'Створено {len(created_tasks)} нових задач',
+        'sleeping_clients_tasks': len(sleeping_clients),
+        'hot_leads_tasks': len(hot_leads),
+        'tasks': [
+            {
+                'id': task.id,
+                'title': task.title,
+                'client': task.client.full_name,
+                'priority': task.priority,
+                'due_date': task.due_date
+            }
+            for task in created_tasks
+        ]
+    })
+
+
+# 🔥 СЕГМЕНТАЦІЯ КЛІЄНТІВ ДЛЯ МАРКЕТИНГУ
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def client_segments_for_marketing(request):
+    """🎯 Сегменти клієнтів для маркетингових кампаній"""
+
+    # VIP клієнти для персональних пропозицій
+    vip_clients = Client.objects.filter(akb_segment='vip')
+
+    # Клієнти з ризиком відтоку для реактивації
+    churn_risk = Client.objects.filter(
+        temperature='sleeping',
+        total_spent__gte=5000  # Тільки цінні клієнти
+    )
+
+    # Лояльні клієнти для програм лояльності
+    loyal_clients = Client.objects.filter(
+        temperature='loyal',
+        total_orders__gte=3
+    )
+
+    # Нові клієнти для онбордингу
+    new_customers = Client.objects.filter(
+        total_orders=1,
+        first_purchase_date__gte=timezone.now() - timedelta(days=30)
+    )
+
+    return Response({
+        'segments': {
+            'vip_clients': {
+                'count': vip_clients.count(),
+                'description': 'VIP клієнти для персональних пропозицій',
+                'avg_spent': vip_clients.aggregate(avg=Avg('total_spent'))['avg'] or 0,
+                'clients': [{'id': c.id, 'name': c.full_name, 'phone': c.phone} for c in vip_clients[:5]]
+            },
+            'churn_risk': {
+                'count': churn_risk.count(),
+                'description': 'Цінні клієнти з ризиком відтоку',
+                'potential_loss': float(churn_risk.aggregate(total=Sum('total_spent'))['total'] or 0),
+                'clients': [{'id': c.id, 'name': c.full_name, 'phone': c.phone, 'days_inactive': c.rfm_recency} for c in
+                            churn_risk[:5]]
+            },
+            'loyal_clients': {
+                'count': loyal_clients.count(),
+                'description': 'Лояльні клієнти для програм лояльності',
+                'avg_orders': loyal_clients.aggregate(avg=Avg('total_orders'))['avg'] or 0,
+                'clients': [{'id': c.id, 'name': c.full_name, 'phone': c.phone} for c in loyal_clients[:5]]
+            },
+            'new_customers': {
+                'count': new_customers.count(),
+                'description': 'Нові клієнти для онбордингу',
+                'total_revenue': float(new_customers.aggregate(total=Sum('total_spent'))['total'] or 0),
+                'clients': [{'id': c.id, 'name': c.full_name, 'phone': c.phone} for c in new_customers[:5]]
+            }
+        }
+    })
