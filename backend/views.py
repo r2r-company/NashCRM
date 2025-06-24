@@ -1242,11 +1242,10 @@ class LeadViewSet(viewsets.ModelViewSet):
 
         allowed_transitions = {
             'queued': ['in_work', 'declined'],
-            'in_work': ['awaiting_prepayment', 'declined'],
-            'awaiting_prepayment': ['preparation', 'declined'],
-            'preparation': ['warehouse_processing', 'declined'],
-            'warehouse_processing': ['on_the_way', 'declined'],
-            'on_the_way': ['completed', 'declined'],
+            'in_work': ['awaiting_packaging', 'declined'],
+            'awaiting_packaging': ['on_the_way', 'declined'],
+            'on_the_way': ['awaiting_cash', 'completed', 'declined'],
+            'awaiting_cash': ['completed'],
             'completed': [],
             'declined': [],
         }
@@ -1311,11 +1310,10 @@ class LeadViewSet(viewsets.ModelViewSet):
 
         allowed_transitions = {
             'queued': ['in_work', 'declined'],
-            'in_work': ['awaiting_prepayment', 'declined'],
-            'awaiting_prepayment': ['preparation', 'declined'],
-            'preparation': ['warehouse_processing', 'declined'],
-            'warehouse_processing': ['on_the_way', 'declined'],
-            'on_the_way': ['completed', 'declined'],
+            'in_work': ['awaiting_packaging', 'declined'],
+            'awaiting_packaging': ['on_the_way', 'declined'],
+            'on_the_way': ['awaiting_cash', 'completed', 'declined'],
+            'awaiting_cash': ['completed'],
             'completed': [],
             'declined': [],
         }

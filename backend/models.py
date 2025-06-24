@@ -401,12 +401,11 @@ class Client(models.Model):
         """Ризик відтоку клієнта"""
         if self.temperature == 'sleeping':
             return 'Високий'
-        elif self.rfm_recency > 180:
+        elif self.rfm_recency is not None and self.rfm_recency > 180:
             return 'Середній'
-        elif self.rfm_score.startswith('5'):
+        elif self.rfm_score and self.rfm_score.startswith('5'):
             return 'Низький'
-        else:
-            return 'Середній'
+        return 'Середній'
 
     @property
     def next_contact_recommendation(self) -> str:
