@@ -1,10 +1,10 @@
-# Оптимізований views.py з розумним кешуванням для ERP/CRM
+
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.db.models import Count, Sum, DurationField, ExpressionWrapper, F, Q, Avg, Case, When, DecimalField, Prefetch
 from django.shortcuts import render
-from django.utils import timezone
+from django.utils import timezone  # ← ЦЕЙ РЯДОК ВІРОГІДНО Є
 from django.utils.dateparse import parse_date
 from django.utils.timezone import now
 from rest_framework import viewsets, status
@@ -16,17 +16,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 import requests
 from django.contrib.auth.models import Permission
+
+# 🚀 ДОДАЙТЕ ЦІ ІМПОРТИ:
 from datetime import datetime, timedelta
 
 from NashCRM import settings
 from backend.forms import LeadsReportForm
 from backend.models import CustomUser, Lead, Client, LeadPaymentOperation, LeadFile
-from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer, \
-    ManagerSerializer
-from backend.services.cache_service import CacheService
+from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer, ManagerSerializer
 from backend.services.lead_creation_service import create_lead_with_logic
 from rest_framework.parsers import MultiPartParser, FormParser
-
 
 # 🚀 УТИЛІТА ДЛЯ РОЗУМНОГО ОЧИЩЕННЯ КЕШУ
 def smart_cache_invalidation(lead_id=None, client_phone=None, manager_id=None):
@@ -194,39 +193,126 @@ class ClientViewSet(viewsets.ModelViewSet):
         return Response(cached_result)
 
 
+# 🚀 ФУНКЦІЯ ПЕРЕВІРКИ ДУБЛІКАТІВ
+def check_duplicate_lead(phone, full_name=None, order_number=None, time_window_minutes=30):
+    """
+    Перевіряє чи є лід дублікатом за останні X хвилин
+    """
+    from django.utils import timezone
+    from datetime import timedelta
+
+    if not phone:
+        return False, None
+
+    # Нормалізуємо телефон
+    normalized_phone = Client.normalize_phone(phone)
+
+    # Час для перевірки (за останні 30 хвилин)
+    time_threshold = timezone.now() - timedelta(minutes=time_window_minutes)
+
+    # Базовий пошук по телефону + часу
+    recent_leads = Lead.objects.filter(
+        phone=normalized_phone,
+        created_at__gte=time_threshold
+    ).order_by('-created_at')
+
+    if not recent_leads.exists():
+        return False, None
+
+    # Якщо є номер замовлення - строга перевірка
+    if order_number:
+        exact_match = recent_leads.filter(order_number=order_number).first()
+        if exact_match:
+            return True, exact_match
+
+    # Якщо є ім'я - перевіряємо ім'я + телефон
+    if full_name:
+        name_match = recent_leads.filter(full_name__iexact=full_name.strip()).first()
+        if name_match:
+            return True, name_match
+
+    # Якщо тільки телефон за останні 5 хвилин - теж дублікат
+    very_recent = recent_leads.filter(
+        created_at__gte=timezone.now() - timedelta(minutes=5)
+    ).first()
+
+    if very_recent:
+        return True, very_recent
+
+    return False, None
+
+
+# 🚀 ОНОВІТЬ ExternalLeadView
 class ExternalLeadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        print(f"📥 API: Отримано запит на створення ліда: {request.data}")
+
         serializer = ExternalLeadSerializer(data=request.data)
         if serializer.is_valid():
+            # 🛡️ ПЕРЕВІРКА НА ДУБЛІКАТ ПЕРЕД СТВОРЕННЯМ
+            phone = serializer.validated_data.get('phone')
+            full_name = serializer.validated_data.get('full_name')
+            order_number = serializer.validated_data.get('order_number')  # Якщо є
+
+            is_duplicate, existing_lead = check_duplicate_lead(
+                phone=phone,
+                full_name=full_name,
+                order_number=order_number,
+                time_window_minutes=30  # Перевіряємо за останні 30 хвилин
+            )
+
+            if is_duplicate:
+                print(f"🚫 ДУБЛІКАТ! Знайдено існуючий лід #{existing_lead.id}")
+                return Response({
+                    "error": "DUPLICATE_LEAD",
+                    "message": f"Лід з таким номером телефону вже існує",
+                    "existing_lead": {
+                        "id": existing_lead.id,
+                        "full_name": existing_lead.full_name,
+                        "phone": existing_lead.phone,
+                        "created_at": existing_lead.created_at,
+                        "status": existing_lead.status
+                    },
+                    "duplicate_check": {
+                        "phone": phone,
+                        "normalized_phone": Client.normalize_phone(phone) if phone else None,
+                        "full_name": full_name,
+                        "time_window": "30 minutes"
+                    }
+                }, status=status.HTTP_409_CONFLICT)  # 409 = Conflict
+
+            # Якщо не дублікат - створюємо лід
+            print(f"✅ Не дублікат - створюємо новий лід")
             lead, context = create_lead_with_logic(serializer.validated_data)
 
-            # 🚀 ОДРАЗУ ОЧИЩУЄМО ВІДПОВІДНИЙ КЕШ
+            # Очищуємо кеш
             smart_cache_invalidation(
                 lead_id=lead.id,
                 manager_id=lead.assigned_to.id if lead.assigned_to else None
             )
 
             return Response({
+                "success": True,
                 "lead_id": lead.id,
                 "client_name": lead.full_name,
                 "assigned_manager": context['assigned_to'],
                 "status": context['final_status'],
                 "created_at": lead.created_at,
                 "details": context,
-                "message": f"Лід створено для {lead.full_name} — статус: {context['final_status'].upper()}"
+                "message": f"✅ Лід створено для {lead.full_name} — статус: {context['final_status'].upper()}"
             }, status=status.HTTP_201_CREATED)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "error": "VALIDATION_ERROR",
+            "details": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def leads_report(request):
-    """
-    Звіт по лідах - тільки 1 хвилина кешу!
-    """
     date_from = request.GET.get("date_from")
     date_to = request.GET.get("date_to")
 
@@ -239,10 +325,9 @@ def leads_report(request):
     except ValueError:
         return Response({"error": "Невірний формат дати. Використовуйте YYYY-MM-DD"}, status=400)
 
-    # 🚀 ТІЛЬКИ 60 СЕКУНД КЕШУ!
+    # 🚀 СКОРОЧУЄМО КЕШ до 60 секунд для звітів
     cache_key = f"leads_report_{date_from}_{date_to}"
-    cached_result = CacheService.get_financial_data(cache_key)
-
+    cached_result = cache.get(cache_key)
     if cached_result:
         return Response(cached_result)
 
@@ -265,14 +350,11 @@ def leads_report(request):
         "by_status": status_counts,
         "expected_sum": expected_sum,
         "received_sum": received_sum,
-        "delta": delta,
-        "generated_at": timezone.now().isoformat(),
-        "ttl_seconds": 60
+        "delta": delta
     }
 
-    # 🚀 ФІНАНСОВІ ДАНІ - 60 СЕКУНД
-    CacheService.set_financial_data(cache_key, result, timeout=60)
-
+    # 🚀 СКОРОЧУЄМО КЕШ до 60 секунд
+    cache.set(cache_key, result, 60)
     return Response(result)
 
 
@@ -388,13 +470,14 @@ class LeadsReportView(APIView):
 
         # Воронка
         funnel_data = leads.aggregate(
-            new=Count('id', filter=Q(status='new')),
             queued=Count('id', filter=Q(status='queued')),
             in_work=Count('id', filter=Q(status='in_work')),
-            awaiting_packaging=Count('id', filter=Q(status='awaiting_packaging')),
+            awaiting_prepayment=Count('id', filter=Q(status='awaiting_prepayment')),
+            preparation=Count('id', filter=Q(status='preparation')),
+            warehouse_processing=Count('id', filter=Q(status='warehouse_processing')),
             on_the_way=Count('id', filter=Q(status='on_the_way')),
-            awaiting_cash=Count('id', filter=Q(status='awaiting_cash')),
-            completed=Count('id', filter=Q(status='completed'))
+            completed=Count('id', filter=Q(status='completed')),
+            declined=Count('id', filter=Q(status='declined'))
         )
 
         # Статистика за день
@@ -489,17 +572,13 @@ def map_search_view(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def funnel_data(request):
-    """
-    Воронка з розумним кешуванням - НЕ 5 ХВИЛИН!
-    """
     date_from_raw = request.GET.get("from")
     date_to_raw = request.GET.get("to")
     manager_id = request.GET.get("manager_id")
 
-    # 🚀 ВИКОРИСТОВУЄМО НОВИЙ СЕРВІС - ТІЛЬКИ 30 СЕКУНД!
+    # 🚀 СКОРОЧУЄМО КЕШ воронки до 30 секунд!
     cache_key = f"funnel_{date_from_raw}_{date_to_raw}_{manager_id}"
-    cached_result = CacheService.get_operational_data(cache_key)
-
+    cached_result = cache.get(cache_key)
     if cached_result:
         return Response(cached_result)
 
@@ -516,12 +595,12 @@ def funnel_data(request):
         leads = leads.filter(assigned_to_id=manager_id)
 
     funnel = leads.aggregate(
-        new=Count('id', filter=Q(status='new')),
         queued=Count('id', filter=Q(status='queued')),
         in_work=Count('id', filter=Q(status='in_work')),
-        awaiting_packaging=Count('id', filter=Q(status='awaiting_packaging')),
+        awaiting_prepayment=Count('id', filter=Q(status='awaiting_prepayment')),
+        preparation=Count('id', filter=Q(status='preparation')),
+        warehouse_processing=Count('id', filter=Q(status='warehouse_processing')),
         on_the_way=Count('id', filter=Q(status='on_the_way')),
-        awaiting_cash=Count('id', filter=Q(status='awaiting_cash')),
         completed=Count('id', filter=Q(status='completed')),
         declined=Count('id', filter=Q(status='declined'))
     )
@@ -531,16 +610,15 @@ def funnel_data(request):
 
     result = {
         "funnel": funnel,
-        "conversion_rate": f"{conversion}%",
-        "cached_at": timezone.now().isoformat(),  # Для debugging
-        "ttl_seconds": 30  # Показуємо час життя кешу
+        "conversion_rate": f"{conversion}%"
     }
 
-    # 🚀 КЕШУЄМО ТІЛЬКИ НА 30 СЕКУНД!
-    CacheService.set_operational_data(cache_key, result, timeout=30)
-
+    # 🚀 КЕШ воронки тільки 30 секунд!
+    cache.set(cache_key, result, 30)
     return Response(result)
 
+
+# Замініть ваш LeadViewSet на цю версію з перевіркою дублікатів:
 
 class LeadViewSet(viewsets.ModelViewSet):
     queryset = Lead.objects.select_related('assigned_to').prefetch_related(
@@ -553,6 +631,69 @@ class LeadViewSet(viewsets.ModelViewSet):
         # 🚀 УБИРАЄМО КЕШ для списку лідів - завжди актуальні дані
         return super().get_queryset()
 
+    def create(self, request, *args, **kwargs):
+        """
+        🛡️ ПЕРЕВАИЗНАЧЕНИЙ CREATE З ПЕРЕВІРКОЮ ДУБЛІКАТІВ
+        """
+        print(f"📥 LeadViewSet CREATE: Отримано запит: {request.data}")
+
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            # 🛡️ ПЕРЕВІРКА НА ДУБЛІКАТ ПЕРЕД СТВОРЕННЯМ
+            phone = serializer.validated_data.get('phone')
+            full_name = serializer.validated_data.get('full_name')
+            order_number = serializer.validated_data.get('order_number')
+
+            is_duplicate, existing_lead = check_duplicate_lead(
+                phone=phone,
+                full_name=full_name,
+                order_number=order_number,
+                time_window_minutes=30
+            )
+
+            if is_duplicate:
+                print(f"🚫 LeadViewSet ДУБЛІКАТ! Знайдено лід #{existing_lead.id}")
+                return Response({
+                    "error": "DUPLICATE_LEAD",
+                    "message": f"Лід з таким номером телефону вже створено {existing_lead.created_at.strftime('%H:%M:%S')}",
+                    "existing_lead": {
+                        "id": existing_lead.id,
+                        "full_name": existing_lead.full_name,
+                        "phone": existing_lead.phone,
+                        "created_at": existing_lead.created_at,
+                        "status": existing_lead.status,
+                        "minutes_ago": int((timezone.now() - existing_lead.created_at).total_seconds() / 60)
+                    },
+                    "duplicate_details": {
+                        "normalized_phone": Client.normalize_phone(phone) if phone else None,
+                        "time_window_checked": "30 minutes",
+                        "match_type": "phone + name" if full_name else "phone only"
+                    }
+                }, status=status.HTTP_409_CONFLICT)
+
+            # Якщо не дублікат - створюємо
+            print(f"✅ LeadViewSet: Створюємо новий лід")
+            self.perform_create(serializer)
+
+            # Очищуємо кеш
+            smart_cache_invalidation(
+                lead_id=serializer.instance.id,
+                manager_id=serializer.instance.assigned_to.id if serializer.instance.assigned_to else None
+            )
+
+            headers = self.get_success_headers(serializer.data)
+            return Response({
+                "success": True,
+                "message": "✅ Лід успішно створено",
+                "lead": serializer.data
+            }, status=status.HTTP_201_CREATED, headers=headers)
+
+        return Response({
+            "error": "VALIDATION_ERROR",
+            "details": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # Решта методів залишаються без змін...
     @action(detail=True, methods=['post'])
     def upload_file(self, request, pk=None):
         lead = self.get_object()
@@ -615,9 +756,6 @@ class LeadViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def add_payment(self, request, pk=None):
-        """
-        Додавання платежу з миттєвим оновленням воронки
-        """
         lead = self.get_object()
 
         operation_type = request.data.get('operation_type')
@@ -634,11 +772,10 @@ class LeadViewSet(viewsets.ModelViewSet):
             comment=comment
         )
 
-        # 🚀 МИТТЄВО ОЧИЩУЄМО КЕШ!
-        CacheService.invalidate_lead_related_cache(
+        # 🚀 РОЗУМНЕ ОЧИЩЕННЯ КЕШУ
+        smart_cache_invalidation(
             lead_id=lead.id,
-            manager_id=lead.assigned_to.id if lead.assigned_to else None,
-            client_phone=lead.phone
+            manager_id=lead.assigned_to.id if lead.assigned_to else None
         )
 
         return Response({
@@ -649,20 +786,11 @@ class LeadViewSet(viewsets.ModelViewSet):
                 "amount": float(payment.amount),
                 "comment": payment.comment,
                 "created_at": payment.created_at,
-            },
-            "cache_cleared": True  # Підтверджуємо
+            }
         }, status=201)
 
-    # Оновлені ключові частини views.py з використанням CacheService
-
-    from backend.services.cache_service import CacheService, cache_result
-
-    # 🚀 НАЙВАЖЛИВІША ФУНКЦІЯ - оновлення статусу ліда
     @action(detail=True, methods=['patch'])
     def update_status(self, request, pk=None):
-        """
-        КЛЮЧОВА ФУНКЦІЯ! Тут виправляємо проблему з кешуванням статусів
-        """
         lead = self.get_object()
         new_status = request.data.get('status')
         old_status = lead.status
@@ -694,12 +822,10 @@ class LeadViewSet(viewsets.ModelViewSet):
             lead.status = new_status
             lead.save()
 
-            # 🚀 ТУТ ГОЛОВНЕ ВИПРАВЛЕННЯ!
-            # Миттєво очищуємо ВСІ пов'язані кеші
-            CacheService.invalidate_lead_related_cache(
+            # 🚀 РОЗУМНЕ ОЧИЩЕННЯ КЕШУ - ТУТ ГОЛОВНЕ!
+            smart_cache_invalidation(
                 lead_id=lead.id,
-                manager_id=lead.assigned_to.id if lead.assigned_to else None,
-                client_phone=lead.phone
+                manager_id=lead.assigned_to.id if lead.assigned_to else None
             )
 
             if new_status == "on_the_way":
@@ -711,8 +837,6 @@ class LeadViewSet(viewsets.ModelViewSet):
                         "comment": f"Очікується оплата за лід #{lead.id}"
                     }
                 )
-                # Очищуємо кеш платежів
-                CacheService.invalidate_lead_related_cache(lead_id=lead.id)
 
             elif new_status == "completed":
                 LeadPaymentOperation.objects.create(
@@ -721,9 +845,6 @@ class LeadViewSet(viewsets.ModelViewSet):
                     amount=lead.actual_cash or lead.price,
                     comment=f"Отримано по завершенню ліда #{lead.id}"
                 )
-                # Очищуємо кеш платежів
-                CacheService.invalidate_lead_related_cache(lead_id=lead.id)
-
                 if lead.assigned_to:
                     from backend.services.lead_queue import on_lead_closed
                     on_lead_closed(lead)
@@ -736,8 +857,7 @@ class LeadViewSet(viewsets.ModelViewSet):
             return Response({
                 "message": f"✅ Статус змінено на {new_status}",
                 "lead_id": lead.id,
-                "new_status": new_status,
-                "cache_cleared": True  # Підтверджуємо очищення кешу
+                "new_status": new_status
             })
         except Exception as e:
             return Response({"error": str(e)}, status=500)
@@ -759,11 +879,11 @@ class LeadViewSet(viewsets.ModelViewSet):
         }
 
         status_descriptions = {
-            'queued': 'У черзі до менеджера',
+            'queued': 'У черзі',
             'in_work': 'Обробляється менеджером',
-            'awaiting_prepayment': 'Очікується аванс',
-            'preparation': 'Підготовка замовлення',
-            'warehouse_processing': 'Обробка на складі',
+            'awaiting_prepayment': 'Очікую аванс',
+            'preparation': 'В роботу',
+            'warehouse_processing': 'Склад',
             'on_the_way': 'В дорозі',
             'completed': 'Завершено',
             'declined': 'Відмовлено'
@@ -855,22 +975,19 @@ def all_payments(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_managers(request):
-    """
-    Список менеджерів з коротким кешуванням
-    """
+    # 🚀 СКОРОЧУЄМО КЕШ менеджерів до 2 хвилин
     cache_key = "managers_list"
-    cached_result = CacheService.get_reference_data(cache_key)
-
+    cached_result = cache.get(cache_key)
     if cached_result:
         return Response(cached_result)
 
     managers = CustomUser.objects.select_related('user').filter(interface_type='accountant')
     serializer = ManagerSerializer(managers, many=True)
 
-    # 🚀 КЕШУЄМО НА 2 ХВИЛИНИ замість 10
-    CacheService.set_reference_data(cache_key, serializer.data, timeout=120)
-
+    # 🚀 СКОРОЧУЄМО до 2 хвилин
+    cache.set(cache_key, serializer.data, 120)
     return Response(serializer.data)
+
 
 class ManagerViewSet(viewsets.ModelViewSet):
     queryset = CustomUser.objects.select_related('user').filter(interface_type='accountant')
@@ -906,69 +1023,65 @@ class CreateLeadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        print(f"📥 CREATE API: Отримано запит: {request.data}")
+
         serializer = LeadSerializer(data=request.data)
         if serializer.is_valid():
-            lead = serializer.save()
+            order_number = serializer.validated_data.get('order_number')
 
-            # 🚀 МИТТЄВО ОЧИЩУЄМО КЕШ!
-            CacheService.invalidate_lead_related_cache(
-                lead_id=lead.id,
-                manager_id=lead.assigned_to.id if lead.assigned_to else None,
-                client_phone=lead.phone
-            )
+            # 🛡️ ПЕРЕВІРКА ПО НОМЕРУ ЗАМОВЛЕННЯ
+            if order_number:
+                existing = Lead.objects.filter(order_number=order_number).first()
+                if existing:
+                    print(f"🚫 ДУБЛІКАТ! Номер замовлення {order_number} вже є в ліді #{existing.id}")
+                    return Response({
+                        "error": f"Номер замовлення {order_number} вже використовується!",
+                        "existing_lead": {
+                            "id": existing.id,
+                            "full_name": existing.full_name,
+                            "phone": existing.phone,
+                            "created_at": existing.created_at
+                        }
+                    }, status=409)
+
+            # Створюємо лід
+            lead = serializer.save()
+            print(f"✅ Створено лід #{lead.id} з номером замовлення {order_number}")
 
             return Response({
+                "success": True,
                 "lead_id": lead.id,
-                "status": lead.status,
-                "full_name": lead.full_name,
-                "created_at": lead.created_at,
-                "cache_cleared": True
+                "order_number": order_number,
+                "message": f"Лід створено з номером замовлення {order_number}"
             }, status=201)
+
         return Response(serializer.errors, status=400)
 
 
-# 🚀 ENDPOINT ДЛЯ МОНІТОРИНГУ КЕШУ (для debugging)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def cache_stats(request):
-    """
-    Статистика кешу для моніторингу (тільки для адмінів)
-    """
-    if not request.user.is_staff:
-        return Response({"error": "Тільки для адміністраторів"}, status=403)
-
-    stats = CacheService.get_cache_stats()
-
-    return Response({
-        "cache_stats": stats,
-        "recommendations": [
-            "🚀 Статуси лідів кешуються на 30 секунд",
-            "💰 Фінансові дані кешуються на 60 секунд",
-            "📊 Воронка кешується на 30 секунд",
-            "👥 Менеджери кешуються на 2 хвилини",
-        ]
-    })
-
-
-# 🚀 ENDPOINT ДЛЯ РУЧНОГО ОЧИЩЕННЯ КЕШУ
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def clear_cache(request):
+def check_lead_duplicate(request):
     """
-    Ручне очищення кешу (для екстрених випадків)
+    Endpoint для перевірки чи є лід дублікатом БЕЗ створення
     """
-    if not request.user.is_staff:
-        return Response({"error": "Тільки для адміністраторів"}, status=403)
+    phone = request.data.get('phone')
+    full_name = request.data.get('full_name')
+    order_number = request.data.get('order_number')
 
-    cache_type = request.data.get('type', 'all')
+    if not phone:
+        return Response({"error": "Телефон обов'язковий"}, status=400)
 
-    if cache_type == 'all':
-        CacheService.invalidate_all_reports()
-        message = "🗑️ Весь кеш очищено"
-    elif cache_type == 'lead' and request.data.get('lead_id'):
-        CacheService.invalidate_lead_related_cache(request.data['lead_id'])
-        message = f"🗑️ Кеш ліда #{request.data['lead_id']} очищено"
-    else:
-        return Response({"error": "Невірний тип очищення"}, status=400)
+    is_duplicate, existing_lead = check_duplicate_lead(phone, full_name, order_number)
 
-    return Response({"message": message})
+    return Response({
+        "is_duplicate": is_duplicate,
+        "phone": phone,
+        "normalized_phone": Client.normalize_phone(phone),
+        "existing_lead": {
+            "id": existing_lead.id,
+            "full_name": existing_lead.full_name,
+            "created_at": existing_lead.created_at,
+            "status": existing_lead.status
+        } if existing_lead else None
+    })
+
