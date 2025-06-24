@@ -847,6 +847,9 @@ class CreateLeadView(APIView):
 
             # 🚀 ОЧИЩУЄМО КЕШ після створення ліда
             cache.delete(f"leads_list_{request.user.id}")
+            cache.delete_pattern("funnel_*")
+            cache.delete_pattern("leads_report_*")
+            cache.delete_pattern("detailed_report_*")
 
             return Response({
                 "lead_id": lead.id,
