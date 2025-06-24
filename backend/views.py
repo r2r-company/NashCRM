@@ -636,6 +636,10 @@ class LeadViewSet(viewsets.ModelViewSet):
             # 🚀 ОЧИЩУЄМО КЕШ після зміни статусу
             cache.delete(f"leads_list_{request.user.id}")
             cache.delete(f"lead_payments_{lead.id}")
+            cache.delete("funnel_None_None_None")
+            cache.delete_pattern("funnel_*")
+            cache.delete_pattern("leads_report_*")
+            cache.delete_pattern("detailed_report_*")
 
             if new_status == "on_the_way":
                 LeadPaymentOperation.objects.get_or_create(
