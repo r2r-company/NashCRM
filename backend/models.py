@@ -1,6 +1,15 @@
+import os
 import re
+from datetime import timedelta
 from django.contrib.auth.models import User
 from django.db import models
+
+from django.utils.timezone import now
+
+def lead_file_upload_path(instance, filename):
+    ext = filename.split('.')[-1]
+    filename = f"{now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
+    return os.path.join("lead_files", filename)
 
 
 class CustomUser(models.Model):
@@ -24,18 +33,30 @@ class CustomUser(models.Model):
             models.Index(fields=['user', 'interface_type']),
         ]
 
+class LeadFile(models.Model):
+    lead = models.ForeignKey("Lead", related_name="uploaded_files", on_delete=models.CASCADE)
+    file = models.FileField(upload_to=lead_file_upload_path)
+    uploaded_at = models.DateTimeField(auto_now_add=True)  # тільки це поле
+
+    class Meta:
+        verbose_name = "Файл ліда"
+        verbose_name_plural = "Файли лідів"
+
+    def __str__(self):
+        return f"{self.lead.full_name} – {self.file.name}"
+
+
 
 class Lead(models.Model):
     STATUS_CHOICES = [
-        ('new', 'Новий'),
         ('queued', 'У черзі'),
         ('in_work', 'Обробляється менеджером'),
-        ('awaiting_packaging', 'Очікую відповідь від складу'),
+        ('awaiting_prepayment', 'Очікую аванс'),
+        ('preparation', 'В роботу'),
+        ('warehouse_processing', 'Склад'),
         ('on_the_way', 'В дорозі'),
-        ('awaiting_cash', 'Очікую кошти від водія'),
-        ('paid', 'Оплачено'),
-        ('declined', 'Відмовлено'),
         ('completed', 'Завершено'),
+        ('declined', 'Відмовлено'),
     ]
 
     full_name = models.CharField(max_length=255, verbose_name="ПІБ")
@@ -44,8 +65,13 @@ class Lead(models.Model):
     source = models.CharField(max_length=100, blank=True, verbose_name="Джерело")
     description = models.TextField(blank=True, verbose_name="Опис")
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="Ціна")
+    advance = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, verbose_name="Аванс")
+    delivery_cost = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, verbose_name="Вартість доставки")
+    comment = models.TextField(blank=True, null=True, verbose_name="Коментар")
+    order_number = models.CharField(max_length=100, blank=True, null=True, verbose_name="Номер замовлення")
+
     delivery_number = models.CharField(max_length=100, blank=True, verbose_name="ТТН")
-    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='new', verbose_name="Статус")
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='queued', verbose_name="Статус")
     assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Призначено")
     queued_position = models.PositiveIntegerField(null=True, blank=True, verbose_name="Позиція в черзі")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Створено")
@@ -60,34 +86,37 @@ class Lead(models.Model):
     def __str__(self):
         return f"{self.full_name} — {self.price} грн ({self.get_status_display()})"
 
+    @property
+    def manager_reward(self):
+        return round(self.price * 0.03, 2) if self.price else 0
+
+    @property
+    def remaining_amount(self):
+        return (self.price or 0) - (self.advance or 0)
+
+    @property
+    def is_two_weeks_old(self):
+        return self.status != 'completed' and self.created_at <= now() - timedelta(days=14)
+
+    @property
+    def is_three_months_old(self):
+        return self.status != 'completed' and self.created_at <= now() - timedelta(days=90)
+
     class Meta:
         verbose_name = "Лід"
         verbose_name_plural = "Ліди"
-        # 🚀 КРИТИЧНІ ІНДЕКСИ для швидкості звітів і фільтрів
         indexes = [
-            # Для воронки статусів (найчастіше використовується)
             models.Index(fields=['status']),
-
-            # Для звітів по датах (created_at найбільш критичний)
             models.Index(fields=['created_at']),
             models.Index(fields=['status_updated_at']),
-
-            # Для зв'язку з клієнтами через телефон
             models.Index(fields=['phone']),
-
-            # Для фільтрів по менеджерах
             models.Index(fields=['assigned_to']),
-
-            # Композитні індекси для складних запитів
-            models.Index(fields=['assigned_to', 'status']),  # Звіти по менеджерах
-            models.Index(fields=['status', 'created_at']),  # Воронка по датах
-            models.Index(fields=['phone', 'status']),  # Клієнтські звіти
-            models.Index(fields=['created_at', 'assigned_to']),  # Продуктивність менеджерів
-
-            # Для фінансових звітів
-            models.Index(fields=['status', 'price']),  # Завершені ліди з сумою
+            models.Index(fields=['assigned_to', 'status']),
+            models.Index(fields=['status', 'created_at']),
+            models.Index(fields=['phone', 'status']),
+            models.Index(fields=['created_at', 'assigned_to']),
+            models.Index(fields=['status', 'price']),
         ]
-
 
 class Client(models.Model):
     CLIENT_TYPE_CHOICES = [

@@ -2,16 +2,20 @@ from django.contrib.auth.models import User
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import Lead, Client, CustomUser
+from .models import Lead, Client, CustomUser, LeadFile
 
+class LeadFileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeadFile
+        fields = ['id', 'file', 'uploaded_at']
 
 class LeadSerializer(serializers.ModelSerializer):
     assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True)
+    files = LeadFileSerializer(many=True, read_only=True)  # ← тут
 
     class Meta:
         model = Lead
         fields = '__all__'
-
 
 class ClientSerializer(serializers.ModelSerializer):
     class Meta:
@@ -99,3 +103,6 @@ class ManagerSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         return instance
+
+
+

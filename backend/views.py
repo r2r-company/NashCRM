@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 from NashCRM import settings
 from backend.forms import LeadsReportForm
-from backend.models import CustomUser, Lead, Client, LeadPaymentOperation
+from backend.models import CustomUser, Lead, Client, LeadPaymentOperation, LeadFile
 from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer, \
     ManagerSerializer
 from backend.services.lead_creation_service import create_lead_with_logic
@@ -485,389 +485,140 @@ def funnel_data(request):
 
 
 class LeadViewSet(viewsets.ModelViewSet):
-    # 🚀 ОПТИМІЗАЦІЯ: Завантажуємо зв'язані дані одразу
     queryset = Lead.objects.select_related('assigned_to').prefetch_related('payment_operations').order_by('-created_at')
     serializer_class = LeadSerializer
     permission_classes = [IsAuthenticated]
 
-    @action(detail=True, methods=['get'])
-    def payments(self, request, pk=None):
-        lead = self.get_object()
-        # Оскільки ми використовуємо prefetch_related, операції вже завантажені
-        ops = lead.payment_operations.all()
-        return Response([
-            {
-                "id": op.id,
-                "type": op.operation_type,
-                "amount": float(op.amount),
-                "comment": op.comment,
-                "created_at": op.created_at,
-            } for op in ops
-        ])
-
     @action(detail=True, methods=['post'])
-    def add_payment(self, request, pk=None):
+    def upload_file(self, request, pk=None):
         lead = self.get_object()
-        amount = request.data.get("amount")
-        op_type = request.data.get("operation_type")
-        comment = request.data.get("comment", "")
+        files = request.FILES.getlist('file')
+        if not files:
+            return Response({"error": "Файли не передано"}, status=400)
 
-        if not amount or not op_type:
-            return Response({"error": "Потрібно amount і operation_type"}, status=400)
-
-        op = LeadPaymentOperation.objects.create(
-            lead=lead,
-            operation_type=op_type,
-            amount=amount,
-            comment=comment
-        )
+        result = []
+        for f in files:
+            obj = LeadFile.objects.create(lead=lead, file=f)
+            result.append({
+                "file_id": obj.id,
+                "file_name": obj.file.name,
+            })
 
         return Response({
-            "message": "Платіж збережено",
-            "id": op.id
+            "message": f"✅ Додано {len(result)} файл(и)",
+            "files": result
         })
+
+    @action(detail=True, methods=['get'])
+    def files(self, request, pk=None):
+        lead = self.get_object()
+        files = lead.uploaded_files.all()
+
+        result = [{
+            "id": f.id,
+            "name": f.file.name,
+            "url": request.build_absolute_uri(f.file.url),
+            "uploaded_at": f.uploaded_at,  # або просто прибери це поле
+        } for f in files]
+
+        return Response({
+            "lead_id": lead.id,
+            "files": result
+        })
+
 
     @action(detail=True, methods=['patch'])
     def update_status(self, request, pk=None):
-        """Безпечне оновлення статусу ліда"""
         lead = self.get_object()
         new_status = request.data.get('status')
         old_status = lead.status
 
-        # 💰 Для статусу "paid" отримуємо суму оплати
-        received_amount = request.data.get('received_amount')
-
         if not new_status:
-            return Response({
-                'error': 'Параметр "status" є обов\'язковим'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Потрібно вказати статус"}, status=400)
 
-        # Перевіряємо чи статус валідний
-        valid_statuses = [choice[0] for choice in Lead.STATUS_CHOICES]
-        if new_status not in valid_statuses:
-            return Response({
-                'error': f'Невалідний статус. Доступні: {", ".join(valid_statuses)}'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # 🔒 ВАЛІДАЦІЯ ПОСЛІДОВНОСТІ СТАТУСІВ
-        def validate_status_transition(from_status, to_status):
-            """Перевірка дозволених переходів між статусами"""
-            allowed_transitions = {
-                'new': ['queued', 'in_work', 'declined'],
-                'queued': ['in_work', 'declined'],
-                'in_work': ['awaiting_packaging', 'declined'],
-                'awaiting_packaging': ['on_the_way', 'declined'],
-                'on_the_way': ['awaiting_cash', 'paid', 'completed', 'declined'],
-                'awaiting_cash': ['paid', 'completed', 'declined'],
-                'paid': ['completed', 'declined'],
-                'completed': [],
-                'declined': [],
-            }
-
-            if to_status in allowed_transitions.get(from_status, []):
-                return True, None
-
-            available = allowed_transitions.get(from_status, [])
-            if not available:
-                return False, f'Статус "{from_status}" є фінальним. Зміна статусу неможлива.'
-
-            return False, f'Неможливо змінити статус з "{from_status}" на "{to_status}". Доступні варіанти: {", ".join(available)}'
-
-        # Перевіряємо перехід
-        is_valid, error_message = validate_status_transition(old_status, new_status)
-        if not is_valid:
-            return Response({
-                'error': f'❌ {error_message}',
-                'code': 'INVALID_STATUS_TRANSITION',
-                'current_status': old_status,
-                'requested_status': new_status,
-                'workflow_info': {
-                    'description': 'Правильний порядок статусів',
-                    'flow': [
-                        'new → queued/in_work',
-                        'queued → in_work',
-                        'in_work → awaiting_packaging (менеджер обробив)',
-                        'awaiting_packaging → on_the_way (склад відправив)',
-                        'on_the_way → awaiting_cash/paid (доставлено)',
-                        'awaiting_cash → paid (гроші отримано)',
-                        '* declined - можна з будь-якого статусу'
-                    ]
-                }
-            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-
-        # 🔥 ВАЛІДАЦІЯ ДЛЯ СТАТУСУ "PAID"
-        if new_status == "paid":
-            if received_amount is None:
-                return Response({
-                    'error': '❌ Для статусу "paid" потрібно вказати суму оплати в полі "received_amount"',
-                    'code': 'RECEIVED_AMOUNT_REQUIRED',
-                    'example': {
-                        'status': 'paid',
-                        'received_amount': 1500.00
-                    }
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            try:
-                received_amount = float(received_amount)
-                if received_amount < 0:
-                    return Response({
-                        'error': '❌ Сума оплати не може бути від\'ємною',
-                        'code': 'NEGATIVE_AMOUNT'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-            except (ValueError, TypeError):
-                return Response({
-                    'error': '❌ Невалідне значення суми. Має бути числом.',
-                    'code': 'INVALID_AMOUNT_FORMAT'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-        # 🔥 ВАЛІДАЦІЯ ДЛЯ СТАТУСУ "COMPLETED"
-        if new_status == "completed":
-            if received_amount is not None:
-                try:
-                    received_amount = float(received_amount)
-                    if received_amount < 0:
-                        return Response({
-                            'error': '❌ Сума доплати не може бути від\'ємною',
-                            'code': 'NEGATIVE_AMOUNT'
-                        }, status=status.HTTP_400_BAD_REQUEST)
-                except (ValueError, TypeError):
-                    return Response({
-                        'error': '❌ Невалідне значення суми доплати. Має бути числом.',
-                        'code': 'INVALID_AMOUNT_FORMAT'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-
-        # 🔥 ВАЛІДАЦІЯ БІЗНЕС-ЛОГІКИ
-        if new_status == "awaiting_packaging":
-            current_price = float(lead.price or 0)
-            if current_price <= 0:
-                return Response({
-                    'error': f'❌ Не можна відправити лід на склад без вказаної суми! Поточна ціна: {current_price} грн',
-                    'code': 'PRICE_REQUIRED',
-                    'current_price': current_price,
-                    'required_action': 'Спочатку вкажіть ціну для ліда (має бути більше 0)',
-                    'lead_info': {
-                        'id': lead.id,
-                        'name': lead.full_name,
-                        'phone': lead.phone
-                    }
-                }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-
-        # Якщо валідація пройшла - оновлюємо статус
-        try:
-            # Зберігаємо actual_cash для статусу paid
-            if new_status == "paid":
-                lead.actual_cash = received_amount
-            elif new_status == "completed" and received_amount is not None:
-                # Для completed - це доплата, додаємо до actual_cash
-                current_actual_cash = float(lead.actual_cash or 0)
-                lead.actual_cash = current_actual_cash + received_amount
-
-            lead.status = new_status
-            lead.save()
-
-            # 🔥 РУЧНЕ СТВОРЕННЯ ОПЕРАЦІЙ
-            if new_status == "on_the_way":
-                operation, created_op = LeadPaymentOperation.objects.get_or_create(
-                    lead=lead,
-                    operation_type='expected',
-                    defaults={
-                        "amount": lead.price,
-                        "comment": f"Очікується оплата за лід #{lead.id} - {lead.full_name}"
-                    }
-                )
-
-            elif new_status == "paid":
-                operation = LeadPaymentOperation.objects.create(
-                    lead=lead,
-                    operation_type='received',
-                    amount=received_amount,
-                    comment=f"Гроші отримано від водія: {received_amount} грн за лід #{lead.id} - {lead.full_name}"
-                )
-
-                # Призначити наступний лід
-                if lead.assigned_to:
-                    from backend.services.lead_queue import on_lead_closed
-                    on_lead_closed(lead)
-
-            elif new_status == "completed":
-                if received_amount and received_amount > 0:
-                    operation = LeadPaymentOperation.objects.create(
-                        lead=lead,
-                        operation_type='received',
-                        amount=received_amount,
-                        comment=f"Доплата при завершенні: {received_amount} грн за лід #{lead.id} - {lead.full_name}"
-                    )
-
-                # Призначити наступний лід
-                if lead.assigned_to:
-                    from backend.services.lead_queue import on_lead_closed
-                    on_lead_closed(lead)
-
-            # Підготуємо відповідь
-            response_data = {
-                'message': f'✅ Статус успішно змінено з "{old_status}" на "{new_status}"',
-                'lead_id': lead.id,
-                'lead_name': lead.full_name,
-                'status_changed': {
-                    'from': old_status,
-                    'to': new_status
-                },
-                'timestamp': lead.status_updated_at,
-                'operations_created': new_status in ["on_the_way", "paid"]
-            }
-
-            # Додаємо інформацію про наступні кроки
-            def get_next_steps(current_status):
-                next_steps = {
-                    'new': ['Призначити менеджеру (queued/in_work)'],
-                    'queued': ['Взяти в роботу (in_work)'],
-                    'in_work': ['Обробити та відправити на склад (awaiting_packaging)'],
-                    'awaiting_packaging': ['Склад відправляє товар (on_the_way)'],
-                    'on_the_way': ['Товар доставлено, очікуємо оплату (awaiting_cash/paid)'],
-                    'awaiting_cash': ['Отримати гроші від водія (paid)'],
-                    'paid': ['✅ Лід завершено'],
-                    'declined': ['❌ Лід відхилено'],
-                    'completed': ['✅ Лід завершено (застарілий статус)']
-                }
-                return next_steps.get(current_status, [])
-
-            response_data['next_steps'] = get_next_steps(new_status)
-
-            # Додаємо інформацію про оплату для статусів paid і completed
-            if new_status == "paid":
-                response_data['payment_info'] = {
-                    'received_amount': float(received_amount),
-                    'expected_amount': float(lead.price or 0),
-                    'difference': float(lead.price or 0) - float(received_amount),
-                    'status': 'partial_payment' if float(lead.price or 0) > float(received_amount) else 'full_payment'
-                }
-            elif new_status == "completed":
-                expected_total = float(lead.price or 0)
-                received_total = float(lead.actual_cash or 0)
-                final_difference = expected_total - received_total
-
-                response_data['payment_info'] = {
-                    'additional_payment': float(received_amount) if received_amount else 0,
-                    'total_received': received_total,
-                    'expected_amount': expected_total,
-                    'final_difference': final_difference,
-                    'debt_remaining': final_difference > 0
-                }
-
-            return Response(response_data)
-
-        except Exception as e:
-            return Response({
-                'error': f'Помилка збереження: {str(e)}',
-                'code': 'SAVE_ERROR'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=True, methods=['patch'])
-    def update_price(self, request, pk=None):
-        """Швидке оновлення ціни ліда"""
-        lead = self.get_object()
-        new_price = request.data.get('price')
-
-        if new_price is None:
-            return Response({
-                'error': 'Параметр "price" є обов\'язковим'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            new_price = float(new_price)
-            if new_price < 0:
-                return Response({
-                    'error': 'Ціна не може бути від\'ємною'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            old_price = float(lead.price or 0)
-            lead.price = new_price
-            lead.save()
-
-            return Response({
-                'message': f'✅ Ціна оновлена з {old_price} грн на {new_price} грн',
-                'lead_id': lead.id,
-                'lead_name': lead.full_name,
-                'price_changed': {
-                    'from': old_price,
-                    'to': new_price
-                },
-                'can_send_to_warehouse': new_price > 0
-            })
-
-        except (ValueError, TypeError):
-            return Response({
-                'error': 'Невалідне значення ціни. Має бути числом.'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-    @action(detail=True, methods=['get'])
-    def financial_summary(self, request, pk=None):
-        """Отримати фінансовий звіт по ліду"""
-        lead = self.get_object()
-
-        # 🚀 ОПТИМІЗАЦІЯ: Використовуємо prefetch_related дані
-        operations = lead.payment_operations.all().order_by('-created_at')
-
-        # 🚀 ОПТИМІЗАЦІЯ: Агрегація замість циклу
-        totals = operations.aggregate(
-            expected_sum=Sum('amount', filter=Q(operation_type='expected')),
-            received_sum=Sum('amount', filter=Q(operation_type='received'))
-        )
-
-        expected_sum = float(totals['expected_sum'] or 0)
-        received_sum = float(totals['received_sum'] or 0)
-        balance = expected_sum - received_sum
-
-        return Response({
-            'lead_id': lead.id,
-            'lead_name': lead.full_name,
-            'lead_price': float(lead.price or 0),
-            'expected_sum': expected_sum,
-            'received_sum': received_sum,
-            'balance': balance,
-            'status': lead.status,
-            'operations': [
-                {
-                    'id': op.id,
-                    'type': op.operation_type,
-                    'amount': float(op.amount),
-                    'comment': op.comment,
-                    'created_at': op.created_at
-                }
-                for op in operations
-            ]
-        })
-
-    @action(detail=True, methods=['get'])
-    def available_statuses(self, request, pk=None):
-        """Отримати доступні статуси для зміни"""
-        lead = self.get_object()
-        current_status = lead.status
-
-        # Карта дозволених переходів
         allowed_transitions = {
-            'new': ['queued', 'in_work', 'declined'],
             'queued': ['in_work', 'declined'],
-            'in_work': ['awaiting_packaging', 'declined'],
-            'awaiting_packaging': ['on_the_way', 'declined'],
-            'on_the_way': ['awaiting_cash', 'paid', 'completed', 'declined'],
-            'awaiting_cash': ['paid', 'completed', 'declined'],
-            'paid': ['completed', 'declined'],
+            'in_work': ['awaiting_prepayment', 'declined'],
+            'awaiting_prepayment': ['preparation', 'declined'],
+            'preparation': ['warehouse_processing', 'declined'],
+            'warehouse_processing': ['on_the_way', 'declined'],
+            'on_the_way': ['completed', 'declined'],
             'completed': [],
             'declined': [],
         }
 
-        # Опис статусів
+        if new_status not in allowed_transitions.get(old_status, []):
+            return Response({
+                "error": f"Не можна перейти зі статусу '{old_status}' у '{new_status}'"
+            }, status=422)
+
+        if new_status == 'preparation':
+            if not lead.price or lead.price <= 0:
+                return Response({"error": "Ціна повинна бути вказана перед підготовкою!"}, status=400)
+
+        try:
+            lead.status = new_status
+            lead.save()
+
+            if new_status == "on_the_way":
+                LeadPaymentOperation.objects.get_or_create(
+                    lead=lead,
+                    operation_type='expected',
+                    defaults={
+                        "amount": lead.price,
+                        "comment": f"Очікується оплата за лід #{lead.id}"
+                    }
+                )
+
+            elif new_status == "completed":
+                LeadPaymentOperation.objects.create(
+                    lead=lead,
+                    operation_type='received',
+                    amount=lead.actual_cash or lead.price,
+                    comment=f"Отримано по завершенню ліда #{lead.id}"
+                )
+                if lead.assigned_to:
+                    from backend.services.lead_queue import on_lead_closed
+                    on_lead_closed(lead)
+
+            elif new_status == "declined":
+                if lead.assigned_to:
+                    from backend.services.lead_queue import on_lead_closed
+                    on_lead_closed(lead)
+
+            return Response({
+                "message": f"✅ Статус змінено на {new_status}",
+                "lead_id": lead.id,
+                "new_status": new_status
+            })
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+    @action(detail=True, methods=['get'])
+    def available_statuses(self, request, pk=None):
+        lead = self.get_object()
+        current_status = lead.status
+
+        allowed_transitions = {
+            'queued': ['in_work', 'declined'],
+            'in_work': ['awaiting_prepayment', 'declined'],
+            'awaiting_prepayment': ['preparation', 'declined'],
+            'preparation': ['warehouse_processing', 'declined'],
+            'warehouse_processing': ['on_the_way', 'declined'],
+            'on_the_way': ['completed', 'declined'],
+            'completed': [],
+            'declined': [],
+        }
+
         status_descriptions = {
-            'new': 'Новий лід',
             'queued': 'У черзі до менеджера',
             'in_work': 'Обробляється менеджером',
-            'awaiting_packaging': 'Очікує обробки на складі',
-            'on_the_way': 'Товар в дорозі до клієнта',
-            'awaiting_cash': 'Очікуємо оплату від водія',
-            'paid': 'Оплачено (завершено)',
-            'declined': 'Відмовлено',
-            'completed': 'Завершено (застарілий)'
+            'awaiting_prepayment': 'Очікується аванс',
+            'preparation': 'Підготовка замовлення',
+            'warehouse_processing': 'Обробка на складі',
+            'on_the_way': 'В дорозі',
+            'completed': 'Завершено',
+            'declined': 'Відмовлено'
         }
 
         available = allowed_transitions.get(current_status, [])
@@ -883,7 +634,7 @@ class LeadViewSet(viewsets.ModelViewSet):
                 {
                     'code': status_code,
                     'description': status_descriptions.get(status_code, status_code),
-                    'requires_additional_data': status_code == 'paid'
+                    'requires_additional_data': False
                 }
                 for status_code in available
             ],
@@ -892,15 +643,14 @@ class LeadViewSet(viewsets.ModelViewSet):
         })
 
     def _get_workflow_position(self, status):
-        """Визначити позицію в робочому процесі"""
         workflow = [
-            'new',
             'queued',
             'in_work',
-            'awaiting_packaging',
+            'awaiting_prepayment',
+            'preparation',
+            'warehouse_processing',
             'on_the_way',
-            'awaiting_cash',
-            'paid'
+            'completed'
         ]
 
         try:
@@ -911,8 +661,6 @@ class LeadViewSet(viewsets.ModelViewSet):
                 'progress_percent': round((position / len(workflow)) * 100, 1)
             }
         except ValueError:
-            if status == 'declined':
-                return {'step': 'declined', 'total_steps': len(workflow), 'progress_percent': 0}
             return {'step': 'unknown', 'total_steps': len(workflow), 'progress_percent': 0}
 
 
@@ -961,3 +709,19 @@ class ManagerViewSet(viewsets.ModelViewSet):
     queryset = CustomUser.objects.select_related('user').filter(interface_type='accountant')
     serializer_class = ManagerSerializer
     permission_classes = [IsAuthenticated]
+
+
+class CreateLeadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = LeadSerializer(data=request.data)
+        if serializer.is_valid():
+            lead = serializer.save()
+            return Response({
+                "lead_id": lead.id,
+                "status": lead.status,
+                "full_name": lead.full_name,
+                "created_at": lead.created_at
+            }, status=201)
+        return Response(serializer.errors, status=400)
