@@ -140,7 +140,6 @@ class LoginView(APIView):
 
 
 class ClientViewSet(viewsets.ModelViewSet):
-    # 🔥 ОБОВ'ЯЗКОВО ДОДАЄМО queryset та serializer_class
     queryset = Client.objects.select_related('assigned_to').order_by('-created_at')
     serializer_class = ClientSerializer
     permission_classes = [IsAuthenticated]
@@ -162,12 +161,9 @@ class ClientViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    # ВСІ ВАШІ ІСНУЮЧІ @action МЕТОДИ ЗАЛИШАЮТЬСЯ:
-
     @action(detail=True, methods=['get'])
     def leads(self, request, pk=None):
         client = self.get_object()
-        # 🚀 КОРОТКИЙ КЕШ для даних клієнта (30 секунд)
         cache_key = f"client_leads_{client.id}"
         cached_result = cache.get(cache_key)
 
@@ -182,15 +178,13 @@ class ClientViewSet(viewsets.ModelViewSet):
                     "created_at": lead.created_at,
                 } for lead in leads
             ]
-            cache.set(cache_key, cached_result, 30)  # 30 секунд замість 5 хвилин
+            cache.set(cache_key, cached_result, 30)
 
         return Response(cached_result)
 
     @action(detail=True, methods=['get'])
     def payments(self, request, pk=None):
         client = self.get_object()
-
-        # 🚀 КОРОТКИЙ КЕШ для платежів (30 секунд)
         cache_key = f"client_payments_{client.id}"
         cached_result = cache.get(cache_key)
 
@@ -209,125 +203,185 @@ class ClientViewSet(viewsets.ModelViewSet):
                     "created_at": p.created_at,
                 } for p in payments
             ]
-            cache.set(cache_key, cached_result, 30)  # 30 секунд
+            cache.set(cache_key, cached_result, 30)
 
         return Response(cached_result)
-
-    # 🔥 НОВІ CRM МЕТОДИ:
 
     @action(detail=False, methods=['get'])
     def temperature_stats(self, request):
         """📊 Статистика по температурі лідів"""
-        stats = Client.objects.values('temperature').annotate(
-            count=Count('id'),
-            total_spent=Sum('total_spent'),
-            avg_check=Avg('avg_check')
-        ).order_by('temperature')
+        cache_key = "temperature_stats"
+        cached_result = cache.get(cache_key)
 
-        result = {}
-        for stat in stats:
-            temp = stat['temperature']
-            result[temp] = {
-                'count': stat['count'],
-                'total_spent': float(stat['total_spent'] or 0),
-                'avg_check': float(stat['avg_check'] or 0),
-                'label': dict(Client.TEMPERATURE_CHOICES).get(temp, temp)
-            }
+        if cached_result is None:
+            # Перевіряємо чи існує поле temperature
+            if not hasattr(Client, 'temperature'):
+                return Response({
+                    'error': 'Поле temperature не існує в моделі Client'
+                }, status=400)
 
-        return Response(result)
+            stats = Client.objects.values('temperature').annotate(
+                count=Count('id'),
+                total_spent=Sum('total_spent'),
+                avg_check=Avg('avg_check')
+            ).order_by('temperature')
+
+            result = {}
+            for stat in stats:
+                temp = stat['temperature']
+                result[temp] = {
+                    'count': stat['count'],
+                    'total_spent': float(stat['total_spent'] or 0),
+                    'avg_check': float(stat['avg_check'] or 0),
+                    'label': dict(Client.TEMPERATURE_CHOICES).get(temp, temp) if hasattr(Client,
+                                                                                         'TEMPERATURE_CHOICES') else temp
+                }
+
+            cache.set(cache_key, result, 300)  # 5 хвилин
+            cached_result = result
+
+        return Response(cached_result)
 
     @action(detail=False, methods=['get'])
     def akb_segments(self, request):
         """💰 Статистика по сегментам АКБ"""
-        stats = Client.objects.filter(
-            akb_segment__in=['vip', 'premium', 'standard', 'basic']
-        ).values('akb_segment').annotate(
-            count=Count('id'),
-            total_revenue=Sum('total_spent'),
-            avg_ltv=Avg('total_spent')
-        ).order_by('-total_revenue')
+        cache_key = "akb_segments_stats"
+        cached_result = cache.get(cache_key)
 
-        return Response({
-            'segments': list(stats),
-            'total_akb_clients': sum(s['count'] for s in stats),
-            'total_akb_revenue': sum(float(s['total_revenue'] or 0) for s in stats)
-        })
+        if cached_result is None:
+            stats = Client.objects.filter(
+                akb_segment__in=['vip', 'premium', 'standard', 'basic']
+            ).values('akb_segment').annotate(
+                count=Count('id'),
+                total_revenue=Sum('total_spent'),
+                avg_ltv=Avg('total_spent')
+            ).order_by('-total_revenue')
+
+            result = {
+                'segments': list(stats),
+                'total_akb_clients': sum(s['count'] for s in stats),
+                'total_akb_revenue': sum(float(s['total_revenue'] or 0) for s in stats)
+            }
+
+            cache.set(cache_key, result, 300)  # 5 хвилин
+            cached_result = result
+
+        return Response(cached_result)
 
     @action(detail=False, methods=['get'])
     def rfm_analysis(self, request):
         """📈 RFM аналіз клієнтів"""
-        # Топ клієнти по RFM
-        top_clients = Client.objects.filter(
-            total_orders__gt=0
-        ).order_by('-total_spent')[:10]
+        cache_key = "rfm_analysis"
+        cached_result = cache.get(cache_key)
 
-        # Розподіл по RFM сегментах
-        rfm_distribution = {}
-        for client in Client.objects.filter(rfm_score__isnull=False):
-            score = client.rfm_score
-            if score not in rfm_distribution:
-                rfm_distribution[score] = 0
-            rfm_distribution[score] += 1
+        if cached_result is None:
+            # Топ клієнти по RFM
+            top_clients = Client.objects.filter(
+                total_orders__gt=0
+            ).order_by('-total_spent')[:10]
 
-        return Response({
-            'top_clients': [
-                {
-                    'id': c.id,
-                    'name': c.full_name,
-                    'phone': c.phone,
-                    'total_spent': float(c.total_spent),
-                    'rfm_score': c.rfm_score,
-                    'segment': c.akb_segment
-                }
-                for c in top_clients
-            ],
-            'rfm_distribution': rfm_distribution
-        })
+            # Розподіл по RFM сегментах
+            rfm_distribution = {}
+            for client in Client.objects.filter(rfm_score__isnull=False):
+                score = client.rfm_score
+                if score not in rfm_distribution:
+                    rfm_distribution[score] = 0
+                rfm_distribution[score] += 1
+
+            result = {
+                'top_clients': [
+                    {
+                        'id': c.id,
+                        'name': c.full_name,
+                        'phone': c.phone,
+                        'total_spent': float(getattr(c, 'total_spent', 0) or 0),
+                        'rfm_score': getattr(c, 'rfm_score', ''),
+                        'segment': getattr(c, 'akb_segment', '')
+                    }
+                    for c in top_clients
+                ],
+                'rfm_distribution': rfm_distribution
+            }
+
+            cache.set(cache_key, result, 300)  # 5 хвилин
+            cached_result = result
+
+        return Response(cached_result)
 
     @action(detail=False, methods=['get'])
     def churn_risk(self, request):
         """⚠️ Клієнти з ризиком відтоку"""
-        risky_clients = Client.objects.filter(
-            Q(temperature='sleeping') | Q(rfm_recency__gt=180)
-        ).filter(total_orders__gt=0).order_by('-total_spent')[:20]
+        cache_key = "churn_risk_clients"
+        cached_result = cache.get(cache_key)
 
-        return Response({
-            'risky_clients': [
-                {
-                    'id': c.id,
-                    'name': c.full_name,
-                    'phone': c.phone,
-                    'last_purchase': c.last_purchase_date,
-                    'days_since_purchase': c.rfm_recency,
-                    'total_spent': float(c.total_spent),
-                    'risk_level': c.risk_of_churn,
-                    'recommendation': c.next_contact_recommendation
-                }
-                for c in risky_clients
-            ]
-        })
+        if cached_result is None:
+            # Перевіряємо які поля існують
+            filters = Q(total_orders__gt=0)
+
+            if hasattr(Client, 'temperature'):
+                filters &= Q(temperature='sleeping')
+
+            if hasattr(Client, 'rfm_recency'):
+                filters |= Q(rfm_recency__gt=180)
+
+            risky_clients = Client.objects.filter(filters).order_by('-total_spent')[:20]
+
+            result = {
+                'risky_clients': [
+                    {
+                        'id': c.id,
+                        'name': c.full_name,
+                        'phone': c.phone,
+                        'last_purchase': getattr(c, 'last_purchase_date', None),
+                        'days_since_purchase': getattr(c, 'rfm_recency', 0),
+                        'total_spent': float(getattr(c, 'total_spent', 0) or 0),
+                        'risk_level': getattr(c, 'risk_of_churn', 'unknown'),
+                        'recommendation': getattr(c, 'next_contact_recommendation', 'Зв\'язатися з клієнтом')
+                    }
+                    for c in risky_clients
+                ]
+            }
+
+            cache.set(cache_key, result, 300)  # 5 хвилин
+            cached_result = result
+
+        return Response(cached_result)
 
     @action(detail=False, methods=['get'])
     def hot_leads(self, request):
         """🔥 Гарячі ліди для менеджерів"""
-        hot_clients = Client.objects.filter(
-            temperature='hot'
-        ).order_by('-created_at')[:20]
+        cache_key = "hot_leads_clients"
+        cached_result = cache.get(cache_key)
 
-        return Response({
-            'hot_leads': [
-                {
-                    'id': c.id,
-                    'name': c.full_name,
-                    'phone': c.phone,
-                    'assigned_to': c.assigned_to.username if c.assigned_to else None,
-                    'created_at': c.created_at,
-                    'leads_count': Lead.objects.filter(phone=c.phone).count(),
-                    'recommendation': c.next_contact_recommendation
-                }
-                for c in hot_clients
-            ]
-        })
+        if cached_result is None:
+            # Перевіряємо чи існує поле temperature
+            if hasattr(Client, 'temperature'):
+                hot_clients = Client.objects.filter(
+                    temperature='hot'
+                ).order_by('-created_at')[:20]
+            else:
+                # Якщо немає поля temperature, використовуємо недавно створених клієнтів
+                hot_clients = Client.objects.order_by('-created_at')[:20]
+
+            result = {
+                'hot_leads': [
+                    {
+                        'id': c.id,
+                        'name': c.full_name,
+                        'phone': c.phone,
+                        'assigned_to': c.assigned_to.username if c.assigned_to else None,
+                        'created_at': c.created_at,
+                        'leads_count': Lead.objects.filter(phone=c.phone).count(),
+                        'recommendation': getattr(c, 'next_contact_recommendation', 'Зв\'язатися з клієнтом')
+                    }
+                    for c in hot_clients
+                ]
+            }
+
+            cache.set(cache_key, result, 300)  # 5 хвилин
+            cached_result = result
+
+        return Response(cached_result)
 
     @action(detail=True, methods=['get'])
     def client_journey(self, request, pk=None):
@@ -337,13 +391,12 @@ class ClientViewSet(viewsets.ModelViewSet):
         # Всі ліди клієнта
         leads = Lead.objects.filter(phone=client.phone).order_by('created_at')
 
-        # Всі взаємодії (якщо модель існує)
+        # Взаємодії (якщо модель існує)
         try:
-            from backend.models import ClientInteraction
             interactions = ClientInteraction.objects.filter(
                 client=client
             ).order_by('created_at')
-        except ImportError:
+        except:
             interactions = []
 
         # Платежі
@@ -362,7 +415,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'details': {
                     'status': lead.status,
                     'price': float(lead.price or 0),
-                    'source': lead.source
+                    'source': getattr(lead, 'source', 'Невідомо')
                 }
             })
 
@@ -372,8 +425,8 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'date': interaction.created_at,
                 'title': f'{interaction.get_interaction_type_display()}: {interaction.subject}',
                 'details': {
-                    'outcome': interaction.outcome,
-                    'description': interaction.description
+                    'outcome': getattr(interaction, 'outcome', ''),
+                    'description': getattr(interaction, 'description', '')
                 }
             })
 
@@ -398,7 +451,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'phone': client.phone,
                 'temperature': getattr(client, 'temperature', 'cold'),
                 'akb_segment': getattr(client, 'akb_segment', 'new'),
-                'total_spent': float(getattr(client, 'total_spent', 0)),
+                'total_spent': float(getattr(client, 'total_spent', 0) or 0),
                 'rfm_score': getattr(client, 'rfm_score', '')
             },
             'timeline': timeline,
@@ -407,8 +460,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'total_interactions': len(interactions),
                 'total_payments': payments.count(),
                 'customer_since': getattr(client, 'first_purchase_date', None),
-                'ltv': float(getattr(client, 'customer_lifetime_value', 0)) if hasattr(client,
-                                                                                       'customer_lifetime_value') else 0
+                'ltv': float(getattr(client, 'customer_lifetime_value', 0) or 0)
             }
         })
 
@@ -424,15 +476,23 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'error': 'Поле temperature не існує в моделі Client. Потрібно застосувати міграції.'
             }, status=400)
 
-        from backend.models import Client
+        if not hasattr(Client, 'TEMPERATURE_CHOICES'):
+            return Response({
+                'error': 'TEMPERATURE_CHOICES не визначені в моделі Client'
+            }, status=400)
+
         if new_temperature not in dict(Client.TEMPERATURE_CHOICES):
             return Response({
-                'error': 'Неправильна температура'
+                'error': 'Неправильна температура',
+                'available_options': list(dict(Client.TEMPERATURE_CHOICES).keys())
             }, status=400)
 
         old_temperature = client.temperature
         client.temperature = new_temperature
         client.save()
+
+        # Очищуємо кеш
+        smart_cache_invalidation()
 
         return Response({
             'message': f'Температура змінена: {old_temperature} → {new_temperature}',
@@ -440,200 +500,6 @@ class ClientViewSet(viewsets.ModelViewSet):
             'old_temperature': old_temperature,
             'new_temperature': new_temperature
         })
-
-    @action(detail=False, methods=['get'])
-    def akb_segments(self, request):
-        """💰 Статистика по сегментам АКБ"""
-        stats = Client.objects.filter(
-            akb_segment__in=['vip', 'premium', 'standard', 'basic']
-        ).values('akb_segment').annotate(
-            count=Count('id'),
-            total_revenue=Sum('total_spent'),
-            avg_ltv=Avg('total_spent')
-        ).order_by('-total_revenue')
-
-        return Response({
-            'segments': list(stats),
-            'total_akb_clients': sum(s['count'] for s in stats),
-            'total_akb_revenue': sum(float(s['total_revenue'] or 0) for s in stats)
-        })
-
-    @action(detail=False, methods=['get'])
-    def rfm_analysis(self, request):
-        """📈 RFM аналіз клієнтів"""
-        # Топ клієнти по RFM
-        top_clients = Client.objects.filter(
-            total_orders__gt=0
-        ).order_by('-total_spent')[:10]
-
-        # Розподіл по RFM сегментах
-        rfm_distribution = {}
-        for client in Client.objects.filter(rfm_score__isnull=False):
-            score = client.rfm_score
-            if score not in rfm_distribution:
-                rfm_distribution[score] = 0
-            rfm_distribution[score] += 1
-
-        return Response({
-            'top_clients': [
-                {
-                    'id': c.id,
-                    'name': c.full_name,
-                    'phone': c.phone,
-                    'total_spent': float(c.total_spent),
-                    'rfm_score': c.rfm_score,
-                    'segment': c.akb_segment
-                }
-                for c in top_clients
-            ],
-            'rfm_distribution': rfm_distribution
-        })
-
-    @action(detail=False, methods=['get'])
-    def churn_risk(self, request):
-        """⚠️ Клієнти з ризиком відтоку"""
-        risky_clients = Client.objects.filter(
-            Q(temperature='sleeping') | Q(rfm_recency__gt=180)
-        ).filter(total_orders__gt=0).order_by('-total_spent')[:20]
-
-        return Response({
-            'risky_clients': [
-                {
-                    'id': c.id,
-                    'name': c.full_name,
-                    'phone': c.phone,
-                    'last_purchase': c.last_purchase_date,
-                    'days_since_purchase': c.rfm_recency,
-                    'total_spent': float(c.total_spent),
-                    'risk_level': c.risk_of_churn,
-                    'recommendation': c.next_contact_recommendation
-                }
-                for c in risky_clients
-            ]
-        })
-
-    @action(detail=False, methods=['get'])
-    def hot_leads(self, request):
-        """🔥 Гарячі ліди для менеджерів"""
-        hot_clients = Client.objects.filter(
-            temperature='hot'
-        ).order_by('-created_at')[:20]
-
-        return Response({
-            'hot_leads': [
-                {
-                    'id': c.id,
-                    'name': c.full_name,
-                    'phone': c.phone,
-                    'assigned_to': c.assigned_to.username if c.assigned_to else None,
-                    'created_at': c.created_at,
-                    'leads_count': Lead.objects.filter(phone=c.phone).count(),
-                    'recommendation': c.next_contact_recommendation
-                }
-                for c in hot_clients
-            ]
-        })
-
-    @action(detail=True, methods=['get'])
-    def client_journey(self, request, pk=None):
-        """🛤️ Подорож клієнта (Customer Journey)"""
-        client = self.get_object()
-
-        # Всі ліди клієнта
-        leads = Lead.objects.filter(phone=client.phone).order_by('created_at')
-
-        # Всі взаємодії
-        interactions = ClientInteraction.objects.filter(
-            client=client
-        ).order_by('created_at')
-
-        # Платежі
-        payments = LeadPaymentOperation.objects.filter(
-            lead__phone=client.phone
-        ).order_by('created_at')
-
-        # Створюємо хронологію
-        timeline = []
-
-        for lead in leads:
-            timeline.append({
-                'type': 'lead',
-                'date': lead.created_at,
-                'title': f'Створено лід: {lead.full_name}',
-                'details': {
-                    'status': lead.status,
-                    'price': float(lead.price or 0),
-                    'source': lead.source
-                }
-            })
-
-        for interaction in interactions:
-            timeline.append({
-                'type': 'interaction',
-                'date': interaction.created_at,
-                'title': f'{interaction.get_interaction_type_display()}: {interaction.subject}',
-                'details': {
-                    'outcome': interaction.outcome,
-                    'description': interaction.description
-                }
-            })
-
-        for payment in payments:
-            timeline.append({
-                'type': 'payment',
-                'date': payment.created_at,
-                'title': f'Платіж: {payment.amount} грн',
-                'details': {
-                    'type': payment.operation_type,
-                    'comment': payment.comment
-                }
-            })
-
-        # Сортуємо по даті
-        timeline.sort(key=lambda x: x['date'])
-
-        return Response({
-            'client': {
-                'id': client.id,
-                'name': client.full_name,
-                'phone': client.phone,
-                'temperature': client.temperature,
-                'akb_segment': client.akb_segment,
-                'total_spent': float(client.total_spent),
-                'rfm_score': client.rfm_score
-            },
-            'timeline': timeline,
-            'summary': {
-                'total_leads': leads.count(),
-                'total_interactions': interactions.count(),
-                'total_payments': payments.count(),
-                'customer_since': client.first_purchase_date,
-                'ltv': float(client.customer_lifetime_value)
-            }
-        })
-
-    @action(detail=True, methods=['post'])
-    def update_temperature(self, request, pk=None):
-        """🌡️ Ручне оновлення температури клієнта"""
-        client = self.get_object()
-        new_temperature = request.data.get('temperature')
-
-        if new_temperature not in dict(Client.TEMPERATURE_CHOICES):
-            return Response({
-                'error': 'Неправильна температура'
-            }, status=400)
-
-        old_temperature = client.temperature
-        client.temperature = new_temperature
-        client.save()
-
-        return Response({
-            'message': f'Температура змінена: {old_temperature} → {new_temperature}',
-            'client_id': client.id,
-            'old_temperature': old_temperature,
-            'new_temperature': new_temperature
-        })
-
 
 # 🚀 ФУНКЦІЯ ПЕРЕВІРКИ ДУБЛІКАТІВ
 def check_duplicate_lead(phone, full_name=None, order_number=None, time_window_minutes=30):
