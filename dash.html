@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <title>CRM Дашборд</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f2f2f2;
+      padding: 20px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    h2 {
+      margin-top: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #ddd;
+    }
+    th {
+      background: #eee;
+      text-align: left;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 4px;
+      background: #007bff;
+      color: #fff;
+      font-size: 12px;
+      margin-left: 5px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>CRM Дашборд</h1>
+
+  <div class="card" id="summary">Завантаження...</div>
+  <div class="card" id="temperature"></div>
+  <div class="card" id="interactions"></div>
+
+  <script>
+    const baseUrl = "https://nashcrm.onrender.com/api/crm/dashboard/";
+    const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzUzNDYwMDQ0LCJpYXQiOjE3NTA4NjgwNDQsImp0aSI6IjBiYWU3MjY2ZjVlOTQxOGViYTdmMTY4YjIwYmM3MDRjIiwidXNlcl9pZCI6MX0.bd6yb93mRmDxdp9Qwyf24zqKy-zCJL5Qu24DJJxLYFM"; // 🔥 встав токен
+
+    fetch(baseUrl, {
+      headers: {
+        "Authorization": "Token " + token
+      }
+    })
+    .then(res => {
+      if (!res.ok) throw new Error("API error: " + res.status);
+      return res.json();
+    })
+    .then(data => {
+      renderSummary(data.summary);
+      renderTemperature(data.temperature_breakdown);
+      renderInteractions(data.recent_interactions);
+    })
+    .catch(err => {
+      document.getElementById("summary").innerHTML = `<span style="color:red;">Помилка: ${err.message}</span>`;
+    });
+
+    function renderSummary(summary) {
+      document.getElementById('summary').innerHTML = `
+        <h2>Загальна інформація</h2>
+        <p>Клієнтів: ${summary.total_clients}</p>
+        <p>АКБ клієнтів: ${summary.akb_clients}</p>
+        <p>Гарячі ліди: ${summary.hot_leads}</p>
+        <p>Ризик втрати: ${summary.churn_risk}</p>
+        <p>Виручка: ${summary.total_revenue.toFixed(2)} грн</p>
+        <p>Середній LTV: ${summary.avg_ltv.toFixed(2)}</p>
+        <p>Термінових задач: <span class="badge">${summary.urgent_tasks}</span></p>
+      `;
+    }
+
+    function renderTemperature(temp) {
+      document.getElementById('temperature').innerHTML = `
+        <h2>Температура лідів</h2>
+        <ul>
+          <li>❄️ Холодні: ${temp.cold}</li>
+          <li>🌤️ Теплі: ${temp.warm}</li>
+          <li>🔥 Гарячі: ${temp.hot}</li>
+          <li>😴 Сплячі: ${temp.sleeping}</li>
+        </ul>
+      `;
+    }
+
+    function renderInteractions(interactions) {
+      const el = document.getElementById('interactions');
+      if (!interactions.length) {
+        el.innerHTML = "<h2>Взаємодії</h2><p>Немає записів</p>";
+        return;
+      }
+
+      el.innerHTML = `
+        <h2>Останні взаємодії</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Клієнт</th>
+              <th>Тип</th>
+              <th>Тема</th>
+              <th>Результат</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${interactions.map(i => `
+              <tr>
+                <td>${new Date(i.created_at).toLocaleString()}</td>
+                <td>${i.client_name}</td>
+                <td>${i.type}</td>
+                <td>${i.subject}</td>
+                <td>${i.outcome}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  </script>
+
+</body>
+</html>
