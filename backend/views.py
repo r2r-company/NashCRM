@@ -1,4 +1,3 @@
-
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
@@ -161,9 +160,14 @@ class ClientViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    @action(detail=True, methods=['get'])
-    def leads(self, request, pk=None):
-        client = self.get_object()
+    @action(detail=False, methods=['get'], url_path='leads/(?P<client_id>[^/.]+)')
+    def leads(self, request, client_id=None):
+        """GET /api/clients/leads/{id}/"""
+        try:
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            return Response({'error': 'Клієнт не знайдено'}, status=404)
+
         cache_key = f"client_leads_{client.id}"
         cached_result = cache.get(cache_key)
 
@@ -180,11 +184,20 @@ class ClientViewSet(viewsets.ModelViewSet):
             ]
             cache.set(cache_key, cached_result, 30)
 
-        return Response(cached_result)
+        return Response({
+            'client_id': client.id,
+            'client_name': client.full_name,
+            'leads': cached_result
+        })
 
-    @action(detail=True, methods=['get'])
-    def payments(self, request, pk=None):
-        client = self.get_object()
+    @action(detail=False, methods=['get'], url_path='payments/(?P<client_id>[^/.]+)')
+    def payments(self, request, client_id=None):
+        """GET /api/clients/payments/{id}/"""
+        try:
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            return Response({'error': 'Клієнт не знайдено'}, status=404)
+
         cache_key = f"client_payments_{client.id}"
         cached_result = cache.get(cache_key)
 
@@ -205,11 +218,15 @@ class ClientViewSet(viewsets.ModelViewSet):
             ]
             cache.set(cache_key, cached_result, 30)
 
-        return Response(cached_result)
+        return Response({
+            'client_id': client.id,
+            'client_name': client.full_name,
+            'payments': cached_result
+        })
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='temperature-stats')
     def temperature_stats(self, request):
-        """📊 Статистика по температурі лідів"""
+        """GET /api/clients/temperature-stats/"""
         cache_key = "temperature_stats"
         cached_result = cache.get(cache_key)
 
@@ -233,18 +250,17 @@ class ClientViewSet(viewsets.ModelViewSet):
                     'count': stat['count'],
                     'total_spent': float(stat['total_spent'] or 0),
                     'avg_check': float(stat['avg_check'] or 0),
-                    'label': dict(Client.TEMPERATURE_CHOICES).get(temp, temp) if hasattr(Client,
-                                                                                         'TEMPERATURE_CHOICES') else temp
+                    'label': dict(Client.TEMPERATURE_CHOICES).get(temp, temp) if hasattr(Client, 'TEMPERATURE_CHOICES') else temp
                 }
 
-            cache.set(cache_key, result, 300)  # 5 хвилин
+            cache.set(cache_key, result, 300)
             cached_result = result
 
         return Response(cached_result)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='akb-segments')
     def akb_segments(self, request):
-        """💰 Статистика по сегментам АКБ"""
+        """GET /api/clients/akb-segments/"""
         cache_key = "akb_segments_stats"
         cached_result = cache.get(cache_key)
 
@@ -263,24 +279,22 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'total_akb_revenue': sum(float(s['total_revenue'] or 0) for s in stats)
             }
 
-            cache.set(cache_key, result, 300)  # 5 хвилин
+            cache.set(cache_key, result, 300)
             cached_result = result
 
         return Response(cached_result)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='rfm-analysis')
     def rfm_analysis(self, request):
-        """📈 RFM аналіз клієнтів"""
+        """GET /api/clients/rfm-analysis/"""
         cache_key = "rfm_analysis"
         cached_result = cache.get(cache_key)
 
         if cached_result is None:
-            # Топ клієнти по RFM
             top_clients = Client.objects.filter(
                 total_orders__gt=0
             ).order_by('-total_spent')[:10]
 
-            # Розподіл по RFM сегментах
             rfm_distribution = {}
             for client in Client.objects.filter(rfm_score__isnull=False):
                 score = client.rfm_score
@@ -303,19 +317,18 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'rfm_distribution': rfm_distribution
             }
 
-            cache.set(cache_key, result, 300)  # 5 хвилин
+            cache.set(cache_key, result, 300)
             cached_result = result
 
         return Response(cached_result)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='churn-risk')
     def churn_risk(self, request):
-        """⚠️ Клієнти з ризиком відтоку"""
+        """GET /api/clients/churn-risk/"""
         cache_key = "churn_risk_clients"
         cached_result = cache.get(cache_key)
 
         if cached_result is None:
-            # Перевіряємо які поля існують
             filters = Q(total_orders__gt=0)
 
             if hasattr(Client, 'temperature'):
@@ -342,25 +355,23 @@ class ClientViewSet(viewsets.ModelViewSet):
                 ]
             }
 
-            cache.set(cache_key, result, 300)  # 5 хвилин
+            cache.set(cache_key, result, 300)
             cached_result = result
 
         return Response(cached_result)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='hot-leads')
     def hot_leads(self, request):
-        """🔥 Гарячі ліди для менеджерів"""
+        """GET /api/clients/hot-leads/"""
         cache_key = "hot_leads_clients"
         cached_result = cache.get(cache_key)
 
         if cached_result is None:
-            # Перевіряємо чи існує поле temperature
             if hasattr(Client, 'temperature'):
                 hot_clients = Client.objects.filter(
                     temperature='hot'
                 ).order_by('-created_at')[:20]
             else:
-                # Якщо немає поля temperature, використовуємо недавно створених клієнтів
                 hot_clients = Client.objects.order_by('-created_at')[:20]
 
             result = {
@@ -378,20 +389,23 @@ class ClientViewSet(viewsets.ModelViewSet):
                 ]
             }
 
-            cache.set(cache_key, result, 300)  # 5 хвилин
+            cache.set(cache_key, result, 300)
             cached_result = result
 
         return Response(cached_result)
 
-    @action(detail=True, methods=['get'])
-    def client_journey(self, request, pk=None):
-        """🛤️ Подорож клієнта (Customer Journey)"""
-        client = self.get_object()
+    @action(detail=False, methods=['get'], url_path='journey/(?P<client_id>[^/.]+)')
+    def client_journey(self, request, client_id=None):
+        """GET /api/clients/journey/{id}/"""
+        try:
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            return Response({'error': 'Клієнт не знайдено'}, status=404)
 
         # Всі ліди клієнта
         leads = Lead.objects.filter(phone=client.phone).order_by('created_at')
 
-        # Взаємодії (якщо модель існує)
+        # Взаємодії
         try:
             interactions = ClientInteraction.objects.filter(
                 client=client
@@ -404,7 +418,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             lead__phone=client.phone
         ).order_by('created_at')
 
-        # Створюємо хронологію
+        # Хронологія
         timeline = []
 
         for lead in leads:
@@ -441,7 +455,6 @@ class ClientViewSet(viewsets.ModelViewSet):
                 }
             })
 
-        # Сортуємо по даті
         timeline.sort(key=lambda x: x['date'])
 
         return Response({
@@ -464,39 +477,46 @@ class ClientViewSet(viewsets.ModelViewSet):
             }
         })
 
-    @action(detail=True, methods=['post'])
-    def update_temperature(self, request, pk=None):
-        """🌡️ Ручне оновлення температури клієнта"""
-        client = self.get_object()
+    @action(detail=False, methods=['post'], url_path='update-temperature/(?P<client_id>[^/.]+)')
+    def update_temperature(self, request, client_id=None):
+        """POST /api/clients/update-temperature/{id}/"""
+        try:
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            return Response({'error': 'Клієнт не знайдено'}, status=404)
+
         new_temperature = request.data.get('temperature')
 
-        # Перевіряємо чи поле існує
         if not hasattr(client, 'temperature'):
             return Response({
-                'error': 'Поле temperature не існує в моделі Client. Потрібно застосувати міграції.'
+                'error': 'Поле temperature не існує в моделі Client'
             }, status=400)
 
         if not hasattr(Client, 'TEMPERATURE_CHOICES'):
             return Response({
-                'error': 'TEMPERATURE_CHOICES не визначені в моделі Client'
+                'error': 'TEMPERATURE_CHOICES не визначені'
             }, status=400)
 
         if new_temperature not in dict(Client.TEMPERATURE_CHOICES):
             return Response({
                 'error': 'Неправильна температура',
-                'available_options': list(dict(Client.TEMPERATURE_CHOICES).keys())
+                'available_options': [
+                    {'code': code, 'label': label}
+                    for code, label in Client.TEMPERATURE_CHOICES
+                ]
             }, status=400)
 
         old_temperature = client.temperature
         client.temperature = new_temperature
         client.save()
 
-        # Очищуємо кеш
         smart_cache_invalidation()
 
         return Response({
+            'success': True,
             'message': f'Температура змінена: {old_temperature} → {new_temperature}',
             'client_id': client.id,
+            'client_name': client.full_name,
             'old_temperature': old_temperature,
             'new_temperature': new_temperature
         })
@@ -926,8 +946,6 @@ def funnel_data(request):
     return Response(result)
 
 
-# Замініть ваш LeadViewSet на цю версію з перевіркою дублікатів:
-
 class LeadViewSet(viewsets.ModelViewSet):
     queryset = Lead.objects.select_related('assigned_to').prefetch_related(
         Prefetch('payment_operations', queryset=LeadPaymentOperation.objects.order_by('-created_at'))
@@ -935,79 +953,131 @@ class LeadViewSet(viewsets.ModelViewSet):
     serializer_class = LeadSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        # 🚀 УБИРАЄМО КЕШ для списку лідів - завжди актуальні дані
-        return super().get_queryset()
+    @action(detail=False, methods=['patch'], url_path='update-status/(?P<lead_id>[^/.]+)')
+    def update_status(self, request, lead_id=None):
+        """🔄 PATCH /api/leads/update-status/{id}/"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({'error': 'Лід не знайдено'}, status=404)
 
-    def create(self, request, *args, **kwargs):
-        """
-        🛡️ ПЕРЕВАИЗНАЧЕНИЙ CREATE З ПЕРЕВІРКОЮ ДУБЛІКАТІВ
-        """
-        print(f"📥 LeadViewSet CREATE: Отримано запит: {request.data}")
+        new_status = request.data.get('status')
+        if not new_status:
+            return Response({'error': 'Потрібно вказати статус'}, status=400)
 
-        serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            # 🛡️ ПЕРЕВІРКА НА ДУБЛІКАТ ПЕРЕД СТВОРЕННЯМ
-            phone = serializer.validated_data.get('phone')
-            full_name = serializer.validated_data.get('full_name')
-            order_number = serializer.validated_data.get('order_number')
+        old_status = lead.status
 
-            is_duplicate, existing_lead = check_duplicate_lead(
-                phone=phone,
-                full_name=full_name,
-                order_number=order_number,
-                time_window_minutes=30
-            )
+        # Логіка переходів статусів
+        allowed_transitions = {
+            'queued': ['in_work', 'declined'],
+            'in_work': ['awaiting_packaging', 'declined'],
+            'awaiting_packaging': ['on_the_way', 'declined'],
+            'on_the_way': ['awaiting_cash', 'completed', 'declined'],
+            'awaiting_cash': ['completed'],
+            'completed': [],
+            'declined': [],
+        }
 
-            if is_duplicate:
-                print(f"🚫 LeadViewSet ДУБЛІКАТ! Знайдено лід #{existing_lead.id}")
-                return Response({
-                    "error": "DUPLICATE_LEAD",
-                    "message": f"Лід з таким номером телефону вже створено {existing_lead.created_at.strftime('%H:%M:%S')}",
-                    "existing_lead": {
-                        "id": existing_lead.id,
-                        "full_name": existing_lead.full_name,
-                        "phone": existing_lead.phone,
-                        "created_at": existing_lead.created_at,
-                        "status": existing_lead.status,
-                        "minutes_ago": int((timezone.now() - existing_lead.created_at).total_seconds() / 60)
-                    },
-                    "duplicate_details": {
-                        "normalized_phone": Client.normalize_phone(phone) if phone else None,
-                        "time_window_checked": "30 minutes",
-                        "match_type": "phone + name" if full_name else "phone only"
-                    }
-                }, status=status.HTTP_409_CONFLICT)
-
-            # Якщо не дублікат - створюємо
-            print(f"✅ LeadViewSet: Створюємо новий лід")
-            self.perform_create(serializer)
-
-            # Очищуємо кеш
-            smart_cache_invalidation(
-                lead_id=serializer.instance.id,
-                manager_id=serializer.instance.assigned_to.id if serializer.instance.assigned_to else None
-            )
-
-            headers = self.get_success_headers(serializer.data)
+        if new_status not in allowed_transitions.get(old_status, []):
             return Response({
-                "success": True,
-                "message": "✅ Лід успішно створено",
-                "lead": serializer.data
-            }, status=status.HTTP_201_CREATED, headers=headers)
+                'error': f'Неможливо змінити статус з "{old_status}" на "{new_status}"',
+                'allowed_statuses': allowed_transitions.get(old_status, [])
+            }, status=422)
+
+        try:
+            lead.status = new_status
+            lead.save()
+
+            # Розумне очищення кешу
+            smart_cache_invalidation(
+                lead_id=lead.id,
+                manager_id=lead.assigned_to.id if lead.assigned_to else None
+            )
+
+            # Автоматичні дії при зміні статусу
+            if new_status == "on_the_way":
+                LeadPaymentOperation.objects.get_or_create(
+                    lead=lead,
+                    operation_type='expected',
+                    defaults={
+                        "amount": lead.price,
+                        "comment": f"Очікується оплата за лід #{lead.id}"
+                    }
+                )
+            elif new_status == "completed":
+                LeadPaymentOperation.objects.create(
+                    lead=lead,
+                    operation_type='received',
+                    amount=lead.actual_cash or lead.price,
+                    comment=f"Отримано по завершенню ліда #{lead.id}"
+                )
+
+            return Response({
+                'success': True,
+                'message': f'✅ Статус змінено: {old_status} → {new_status}',
+                'lead_id': lead.id,
+                'old_status': old_status,
+                'new_status': new_status
+            })
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+    @action(detail=False, methods=['post'], url_path='add-payment/(?P<lead_id>[^/.]+)')
+    def add_payment(self, request, lead_id=None):
+        """💰 POST /api/leads/add-payment/{id}/"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({'error': 'Лід не знайдено'}, status=404)
+
+        operation_type = request.data.get('operation_type')
+        amount = request.data.get('amount')
+        comment = request.data.get('comment', '')
+
+        if not operation_type or not amount:
+            return Response({
+                'error': 'operation_type і amount обов\'язкові',
+                'example': {
+                    'operation_type': 'received',
+                    'amount': 1500,
+                    'comment': 'Отримано від клієнта'
+                }
+            }, status=400)
+
+        payment = LeadPaymentOperation.objects.create(
+            lead=lead,
+            operation_type=operation_type,
+            amount=amount,
+            comment=comment
+        )
+
+        # Очищуємо кеш
+        smart_cache_invalidation(lead_id=lead.id)
 
         return Response({
-            "error": "VALIDATION_ERROR",
-            "details": serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+            'success': True,
+            'message': '✅ Платіж додано',
+            'payment': {
+                'id': payment.id,
+                'type': payment.operation_type,
+                'amount': float(payment.amount),
+                'comment': payment.comment,
+                'created_at': payment.created_at,
+            }
+        }, status=201)
 
-    # Решта методів залишаються без змін...
-    @action(detail=True, methods=['post'])
-    def upload_file(self, request, pk=None):
-        lead = self.get_object()
+    @action(detail=False, methods=['post'], url_path='upload-file/(?P<lead_id>[^/.]+)')
+    def upload_file(self, request, lead_id=None):
+        """📎 POST /api/leads/upload-file/{id}/"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({'error': 'Лід не знайдено'}, status=404)
+
         files = request.FILES.getlist('file')
         if not files:
-            return Response({"error": "Файли не передано"}, status=400)
+            return Response({'error': 'Файли не передано'}, status=400)
 
         result = []
         for f in files:
@@ -1015,18 +1085,24 @@ class LeadViewSet(viewsets.ModelViewSet):
             result.append({
                 "file_id": obj.id,
                 "file_name": obj.file.name,
+                "file_url": request.build_absolute_uri(obj.file.url)
             })
 
         return Response({
-            "message": f"✅ Додано {len(result)} файл(и)",
-            "files": result
+            'success': True,
+            'message': f'✅ Додано {len(result)} файл(ів)',
+            'files': result
         })
 
-    @action(detail=True, methods=['get'])
-    def files(self, request, pk=None):
-        lead = self.get_object()
-        files = lead.uploaded_files.all()
+    @action(detail=False, methods=['get'], url_path='files/(?P<lead_id>[^/.]+)')
+    def files(self, request, lead_id=None):
+        """📁 GET /api/leads/files/{id}/"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({'error': 'Лід не знайдено'}, status=404)
 
+        files = lead.uploaded_files.all()
         result = [{
             "id": f.id,
             "name": f.file.name,
@@ -1035,15 +1111,19 @@ class LeadViewSet(viewsets.ModelViewSet):
         } for f in files]
 
         return Response({
-            "lead_id": lead.id,
-            "files": result
+            'lead_id': lead.id,
+            'lead_name': lead.full_name,
+            'files': result
         })
 
-    @action(detail=True, methods=['get'])
-    def payments(self, request, pk=None):
-        lead = self.get_object()
+    @action(detail=False, methods=['get'], url_path='payments/(?P<lead_id>[^/.]+)')
+    def payments(self, request, lead_id=None):
+        """💰 GET /api/leads/payments/{id}/"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({'error': 'Лід не знайдено'}, status=404)
 
-        # 🚀 СКОРОЧУЄМО КЕШ платежів до 30 секунд
         cache_key = f"lead_payments_{lead.id}"
         cached_payments = cache.get(cache_key)
 
@@ -1058,122 +1138,25 @@ class LeadViewSet(viewsets.ModelViewSet):
                     "created_at": p.created_at,
                 } for p in payments
             ]
-            cache.set(cache_key, cached_payments, 30)  # 30 секунд
-
-        return Response(cached_payments)
-
-    @action(detail=True, methods=['post'])
-    def add_payment(self, request, pk=None):
-        lead = self.get_object()
-
-        operation_type = request.data.get('operation_type')
-        amount = request.data.get('amount')
-        comment = request.data.get('comment', '')
-
-        if not operation_type or not amount:
-            return Response({"error": "operation_type і amount обов'язкові"}, status=400)
-
-        payment = LeadPaymentOperation.objects.create(
-            lead=lead,
-            operation_type=operation_type,
-            amount=amount,
-            comment=comment
-        )
-
-        # 🚀 РОЗУМНЕ ОЧИЩЕННЯ КЕШУ
-        smart_cache_invalidation(
-            lead_id=lead.id,
-            manager_id=lead.assigned_to.id if lead.assigned_to else None
-        )
+            cache.set(cache_key, cached_payments, 30)
 
         return Response({
-            "message": "✅ Платіж додано",
-            "payment": {
-                "id": payment.id,
-                "type": payment.operation_type,
-                "amount": float(payment.amount),
-                "comment": payment.comment,
-                "created_at": payment.created_at,
-            }
-        }, status=201)
+            'lead_id': lead.id,
+            'lead_name': lead.full_name,
+            'payments': cached_payments,
+            'total_expected': sum(p['amount'] for p in cached_payments if p['type'] == 'expected'),
+            'total_received': sum(p['amount'] for p in cached_payments if p['type'] == 'received')
+        })
 
-    @action(detail=True, methods=['patch'])
-    def update_status(self, request, pk=None):
-        lead = self.get_object()
-        new_status = request.data.get('status')
-        old_status = lead.status
-
-        if not new_status:
-            return Response({"error": "Потрібно вказати статус"}, status=400)
-
-        allowed_transitions = {
-            'queued': ['in_work', 'declined'],
-            'in_work': ['awaiting_packaging', 'declined'],
-            'awaiting_packaging': ['on_the_way', 'declined'],
-            'on_the_way': ['awaiting_cash', 'completed', 'declined'],
-            'awaiting_cash': ['completed'],
-            'completed': [],
-            'declined': [],
-        }
-
-        if new_status not in allowed_transitions.get(old_status, []):
-            return Response({
-                "error": f"Не можна перейти зі статусу '{old_status}' у '{new_status}'"
-            }, status=422)
-
-        if new_status == 'preparation':
-            if not lead.price or lead.price <= 0:
-                return Response({"error": "Ціна повинна бути вказана перед підготовкою!"}, status=400)
-
+    @action(detail=False, methods=['get'], url_path='available-statuses/(?P<lead_id>[^/.]+)')
+    def available_statuses(self, request, lead_id=None):
+        """📋 GET /api/leads/available-statuses/{id}/"""
         try:
-            lead.status = new_status
-            lead.save()
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({'error': 'Лід не знайдено'}, status=404)
 
-            # 🚀 РОЗУМНЕ ОЧИЩЕННЯ КЕШУ - ТУТ ГОЛОВНЕ!
-            smart_cache_invalidation(
-                lead_id=lead.id,
-                manager_id=lead.assigned_to.id if lead.assigned_to else None
-            )
-
-            if new_status == "on_the_way":
-                LeadPaymentOperation.objects.get_or_create(
-                    lead=lead,
-                    operation_type='expected',
-                    defaults={
-                        "amount": lead.price,
-                        "comment": f"Очікується оплата за лід #{lead.id}"
-                    }
-                )
-
-            elif new_status == "completed":
-                LeadPaymentOperation.objects.create(
-                    lead=lead,
-                    operation_type='received',
-                    amount=lead.actual_cash or lead.price,
-                    comment=f"Отримано по завершенню ліда #{lead.id}"
-                )
-                if lead.assigned_to:
-                    from backend.services.lead_queue import on_lead_closed
-                    on_lead_closed(lead)
-
-            elif new_status == "declined":
-                if lead.assigned_to:
-                    from backend.services.lead_queue import on_lead_closed
-                    on_lead_closed(lead)
-
-            return Response({
-                "message": f"✅ Статус змінено на {new_status}",
-                "lead_id": lead.id,
-                "new_status": new_status
-            })
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
-
-    @action(detail=True, methods=['get'])
-    def available_statuses(self, request, pk=None):
-        lead = self.get_object()
         current_status = lead.status
-
         allowed_transitions = {
             'queued': ['in_work', 'declined'],
             'in_work': ['awaiting_packaging', 'declined'],
@@ -1207,35 +1190,12 @@ class LeadViewSet(viewsets.ModelViewSet):
             'available_statuses': [
                 {
                     'code': status_code,
-                    'description': status_descriptions.get(status_code, status_code),
-                    'requires_additional_data': False
+                    'description': status_descriptions.get(status_code, status_code)
                 }
                 for status_code in available
             ],
-            'is_final': len(available) == 0,
-            'workflow_position': self._get_workflow_position(current_status)
+            'is_final': len(available) == 0
         })
-
-    def _get_workflow_position(self, status):
-        workflow = [
-            'queued',
-            'in_work',
-            'awaiting_prepayment',
-            'preparation',
-            'warehouse_processing',
-            'on_the_way',
-            'completed'
-        ]
-
-        try:
-            position = workflow.index(status) + 1
-            return {
-                'step': position,
-                'total_steps': len(workflow),
-                'progress_percent': round((position / len(workflow)) * 100, 1)
-            }
-        except ValueError:
-            return {'step': 'unknown', 'total_steps': len(workflow), 'progress_percent': 0}
 
 
 @api_view(['GET'])
@@ -1281,16 +1241,16 @@ def all_payments(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_managers(request):
-    # 🚀 СКОРОЧУЄМО КЕШ менеджерів до 2 хвилин
     cache_key = "managers_list"
     cached_result = cache.get(cache_key)
     if cached_result:
         return Response(cached_result)
 
     managers = CustomUser.objects.select_related('user').filter(interface_type='accountant')
-    serializer = ManagerSerializer(managers, many=True)
 
-    # 🚀 СКОРОЧУЄМО до 2 хвилин
+    # Додаємо контекст з request
+    serializer = ManagerSerializer(managers, many=True, context={'request': request})
+
     cache.set(cache_key, serializer.data, 120)
     return Response(serializer.data)
 
@@ -1425,7 +1385,6 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
             'client', 'assigned_to'
         ).order_by('due_date')
 
-        # Фільтри
         client_id = self.request.query_params.get('client_id')
         status = self.request.query_params.get('status')
         assigned_to_me = self.request.query_params.get('assigned_to_me')
@@ -1439,9 +1398,9 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='my-tasks')
     def my_tasks(self, request):
-        """📋 Мої задачі"""
+        """GET /api/tasks/my-tasks/"""
         tasks = ClientTask.objects.filter(
             assigned_to=request.user,
             status__in=['pending', 'in_progress']
@@ -1456,15 +1415,15 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
                     'client_phone': task.client.phone,
                     'priority': task.priority,
                     'due_date': task.due_date,
-                    'overdue': task.due_date < timezone.now()
+                    'is_overdue': task.due_date < timezone.now()
                 }
                 for task in tasks
             ]
         })
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='overdue-tasks')
     def overdue_tasks(self, request):
-        """⏰ Прострочені задачі"""
+        """GET /api/tasks/overdue-tasks/"""
         overdue = ClientTask.objects.filter(
             due_date__lt=timezone.now(),
             status__in=['pending', 'in_progress']
@@ -1483,6 +1442,7 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
                 for task in overdue
             ]
         })
+
 
 
 # 🔥 НОВИЙ API ДЛЯ CRM ДАШБОРДУ
@@ -1742,3 +1702,13 @@ def client_segments_for_marketing(request):
             }
         }
     })
+
+
+def get_viewset_method(viewset_class, method_name):
+    """Допоміжна функція для використання ViewSet методів як окремих view"""
+    def view_func(request, **kwargs):
+        viewset = viewset_class()
+        viewset.request = request
+        viewset.format_kwarg = None
+        return getattr(viewset, method_name)(request, **kwargs)
+    return view_func
