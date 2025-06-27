@@ -960,89 +960,77 @@ class LeadViewSet(viewsets.ModelViewSet):
     serializer_class = LeadSerializer
     permission_classes = [IsAuthenticated]
 
-    @action(detail=False, methods=['patch'], url_path='update-status/(?P<lead_id>[^/.]+)')
-    def update_status(self, request, lead_id=None):
-        """🔄 PATCH /api/leads/update-status/{id}/ - З ФІНАНСОВИМ КОНТРОЛЕМ"""
+    @action(detail=True, methods=['put'], url_path='status')
+    def status(self, request, pk=None):
+        """
+        PUT /api/leads/status/167/
+        Зміна статусу ліда (новий endpoint як хоче розробник)
+        """
         try:
-            lead = Lead.objects.get(id=lead_id)
-        except Lead.DoesNotExist:
-            return Response({'error': 'Лід не знайдено'}, status=404)
+            lead = self.get_object()
+            new_status = request.data.get('status')
 
-        new_status = request.data.get('status')
-        if not new_status:
-            return Response({
-                'error': 'Потрібно вказати статус',
-                'available_statuses': LeadStatusValidator.get_allowed_transitions(lead.status, lead)
-            }, status=400)
+            if not new_status:
+                return Response({
+                    'error': 'Поле status обов\'язкове'
+                }, status=400)
 
-        # 🔥 ВАЛІДАЦІЯ ЧЕРЕЗ ПРОФЕСІЙНИЙ ВАЛІДАТОР
-        validation = validate_lead_status_change(lead.id, new_status, request.user)
+            # Валідація через наш валідатор
+            from backend.validators.lead_status_validator import LeadStatusValidator
 
-        if not validation['allowed']:
-            return Response({
-                'error': validation['reason'],
-                'current_status': validation.get('current_status'),
-                'available_transitions': validation.get('available_transitions'),
-                'payment_info': validation.get('payment_info'),
-                'next_action': validation.get('next_action')
-            }, status=422)  # Unprocessable Entity
+            can_transition, reason = LeadStatusValidator.can_transition(
+                lead.status, new_status, lead
+            )
 
-        old_status = lead.status
-
-        try:
-            # 🔥 АВТОМАТИЧНІ ФІНАНСОВІ ОПЕРАЦІЇ ПРИ ЗМІНІ СТАТУСІВ
-
-            # При переході в "В дорозі" - створюємо очікувану операцію
-            if new_status == "on_the_way" and old_status != "on_the_way":
-                LeadPaymentOperation.objects.get_or_create(
-                    lead=lead,
-                    operation_type='expected',
-                    defaults={
-                        "amount": lead.price or 0,
-                        "comment": f"Очікується повна оплата за лід #{lead.id}"
-                    }
-                )
-                print(f"💰 Створено очікувану оплату для ліда #{lead.id}")
-
-            # При завершенні - перевіряємо повну оплату (додаткова страховка)
-            elif new_status == "completed":
+            if not can_transition:
+                # Повертаємо детальну інформацію при помилці
+                available_transitions = LeadStatusValidator.get_allowed_transitions(lead.status, lead)
                 payment_info = LeadStatusValidator.get_payment_info(lead)
-                if payment_info['shortage'] > 0:
-                    return Response({
-                        'error': f"Неможливо завершити - не вистачає {payment_info['shortage']} грн",
-                        'payment_info': payment_info
-                    }, status=422)
+                next_action = LeadStatusValidator.get_next_action(lead.status, lead)
 
-                print(f"✅ Лід #{lead.id} завершено з повною оплатою")
+                return Response({
+                    'error': reason,
+                    'current_status': {
+                        'code': lead.status,
+                        'name': LeadStatusValidator.STATUS_NAMES.get(lead.status, lead.status)
+                    },
+                    'available_transitions': [
+                        {
+                            'code': status_code,
+                            'name': LeadStatusValidator.STATUS_NAMES.get(status_code, status_code),
+                            'description': LeadStatusValidator.TRANSITION_DESCRIPTIONS.get(
+                                (lead.status, status_code), f"Змінити на {status_code}"
+                            )
+                        }
+                        for status_code in available_transitions
+                    ],
+                    'payment_info': payment_info,
+                    'next_action': next_action
+                }, status=400)
 
             # Зміна статусу
+            old_status = lead.status
             lead.status = new_status
             lead.status_updated_at = timezone.now()
             lead.save()
 
-            # Розумне очищення кешу
-            smart_cache_invalidation(
-                lead_id=lead.id,
-                manager_id=lead.assigned_to.id if lead.assigned_to else None
-            )
-
-            # Результат
-            result = {
+            return Response({
                 'success': True,
-                'message': f'✅ Статус змінено: {LeadStatusValidator.STATUS_NAMES.get(old_status)} → {LeadStatusValidator.STATUS_NAMES.get(new_status)}',
-                'lead_id': lead.id,
-                'old_status': old_status,
-                'new_status': new_status,
-                'payment_info': LeadStatusValidator.get_payment_info(lead),
-                'next_action': LeadStatusValidator.get_next_required_action(lead)
-            }
-
-            return Response(result)
+                'message': f'Статус змінено з "{LeadStatusValidator.STATUS_NAMES.get(old_status)}" на "{LeadStatusValidator.STATUS_NAMES.get(new_status)}"',
+                'old_status': {
+                    'code': old_status,
+                    'name': LeadStatusValidator.STATUS_NAMES.get(old_status, old_status)
+                },
+                'new_status': {
+                    'code': new_status,
+                    'name': LeadStatusValidator.STATUS_NAMES.get(new_status, new_status)
+                },
+                'updated_at': lead.status_updated_at.isoformat()
+            })
 
         except Exception as e:
             return Response({
-                'error': f'Помилка при зміні статусу: {str(e)}',
-                'details': str(e)
+                'error': f'Помилка: {str(e)}'
             }, status=500)
 
     @action(detail=False, methods=['post'], url_path='add-payment/(?P<lead_id>[^/.]+)')
