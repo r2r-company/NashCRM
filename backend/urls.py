@@ -56,15 +56,6 @@ urlpatterns = [
     path('admin/map-search/', map_search_view, name='map_search'),
 
 
-    # 🎯 Основні CRUD операції (стандартний роутер)
-    # Всі @action декоратори автоматично створюють URL:
-    # - /api/clients/temperature-stats/
-    # - /api/clients/akb-segments/
-    # - /api/clients/{id}/leads/
-    # - /api/clients/{id}/payments/
-    # - /api/leads/{id}/update-status/
-    # - /api/leads/{id}/add-payment/
-    # - /api/tasks/my-tasks/
-    # - і т.д.
+
     path('', include(router.urls)),
 ]
