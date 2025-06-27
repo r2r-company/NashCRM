@@ -11,6 +11,7 @@ from django.db import models, transaction
 import logging
 
 from .models import Lead, Client, LeadPaymentOperation, CustomUser, ClientInteraction, ClientTask
+from .validators.lead_status_validator import LeadStatusValidator
 
 logger = logging.getLogger('backend.signals')
 
@@ -37,48 +38,34 @@ def lead_pre_save(sender, instance, **kwargs):
 @receiver(post_save, sender=Lead)
 def lead_post_save(sender, instance, created, **kwargs):
     """
-    Обробка ліда ПІСЛЯ збереження - ТІЛЬКИ для нових лідів
+    Обробка ліда ПІСЛЯ збереження з новою логікою
     """
     if created and instance.pk not in _processing_leads:
         # 🛡️ Додаємо ID в захист від дублювання
         _processing_leads.add(instance.pk)
 
-        print(f"✅ СИГНАЛ: Лід #{instance.pk} успішно створено: {instance.full_name}")
+        print(f"✅ НОВИЙ ЛІД: #{instance.pk} - {instance.full_name}")
 
         def process_new_lead():
             """Обробка нового ліда ПІСЛЯ завершення транзакції"""
             try:
-                # 1. АВТОМАТИЧНЕ СТВОРЕННЯ КЛІЄНТА
+                # 1. АВТОМАТИЧНЕ СТВОРЕННЯ/ОНОВЛЕННЯ КЛІЄНТА
                 if instance.phone:
                     normalized_phone = Client.normalize_phone(instance.phone)
+                    client, created = Client.objects.get_or_create(
+                        phone=normalized_phone,
+                        defaults={
+                            'full_name': instance.full_name or 'Клієнт',
+                            'email': instance.email or '',
+                        }
+                    )
 
-                    # 🛡️ ПОДВІЙНА ПЕРЕВІРКА на існування клієнта
-                    if not Client.objects.filter(phone=normalized_phone).exists():
-                        client = Client.objects.create(
-                            phone=normalized_phone,
-                            full_name=instance.full_name or 'Клієнт',
-                            email=instance.email or '',
-                        )
-                        print(f"👤 СТВОРЕНО клієнта: {client.full_name} ({client.phone})")
+                    if created:
+                        print(f"👤 СТВОРЕНО клієнта: {client.full_name}")
                     else:
-                        client = Client.objects.get(phone=normalized_phone)
-                        print(f"👤 ЗНАЙДЕНО існуючого клієнта: {client.full_name}")
+                        print(f"👤 ЗНАЙДЕНО клієнта: {client.full_name}")
 
-                        # Оновлюємо дані якщо порожні
-                        updated = False
-                        if not client.full_name or client.full_name == 'Клієнт':
-                            if instance.full_name:
-                                client.full_name = instance.full_name
-                                updated = True
-                        if not client.email and instance.email:
-                            client.email = instance.email
-                            updated = True
-
-                        if updated:
-                            client.save()
-                            print(f"👤 ОНОВЛЕНО дані клієнта: {client.full_name}")
-
-                # 2. АВТОМАТИЧНИЙ ПЕРЕХІД queued → in_work
+                # 2. АВТОМАТИЧНИЙ ПЕРЕХІД queued → in_work (З ВАЛІДАЦІЄЮ)
                 current_lead = Lead.objects.get(pk=instance.pk)
                 if (current_lead.status == 'queued' and
                         current_lead.assigned_to and
@@ -86,29 +73,31 @@ def lead_post_save(sender, instance, created, **kwargs):
                             assigned_to=current_lead.assigned_to,
                             status='in_work'
                         ).exclude(pk=current_lead.pk).exists()):
-                    # Використовуємо update() щоб НЕ викликати сигнали знову
-                    Lead.objects.filter(pk=current_lead.pk).update(
-                        status='in_work',
-                        status_updated_at=timezone.now()
-                    )
-                    print(f"🚀 Лід #{current_lead.pk} переведено в роботу")
 
-                # Очищуємо кеш
+                    # Перевіряємо чи можливий перехід
+                    from backend.validators.lead_status_validator import LeadStatusValidator
+                    can_transition, reason = LeadStatusValidator.can_transition(
+                        'queued', 'in_work', current_lead
+                    )
+
+                    if can_transition:
+                        current_lead.status = 'in_work'
+                        current_lead.status_updated_at = timezone.now()
+                        current_lead.save()
+                        print(f"🚀 Лід #{current_lead.pk} автоматично переведено в роботу")
+
                 from django.core.cache import cache
                 cache.clear()
 
             except Exception as e:
                 print(f"❌ ПОМИЛКА обробки нового ліда: {e}")
             finally:
-                # 🛡️ Видаляємо з захисту після обробки
                 _processing_leads.discard(instance.pk)
 
-        # 🚀 КЛЮЧОВЕ: Виконуємо ПІСЛЯ завершення транзакції
         transaction.on_commit(process_new_lead)
 
     elif not created:
-        # Просто оновлення існуючого ліда
-        print(f"🔄 Лід #{instance.pk} оновлено")
+        print(f"🔄 ОНОВЛЕНО лід #{instance.pk}")
         from django.core.cache import cache
         cache.clear()
 
@@ -116,7 +105,7 @@ def lead_post_save(sender, instance, created, **kwargs):
 @receiver(post_save, sender=LeadPaymentOperation)
 def payment_operation_created(sender, instance, created, **kwargs):
     """
-    Обробка створення платіжної операції
+    Обробка створення платіжної операції з автозавершенням
     """
     if created:
         print(f"💰 ПЛАТІЖ: {instance.operation_type} {instance.amount} для ліда #{instance.lead.pk}")
@@ -125,26 +114,68 @@ def payment_operation_created(sender, instance, created, **kwargs):
         from django.core.cache import cache
         cache.clear()
 
-        # Автозавершення при повній оплаті
+        # 🔥 АВТОЗАВЕРШЕННЯ ПРИ ПОВНІЙ ОПЛАТІ (ТІЛЬКИ ДЛЯ ОТРИМАНИХ КОШТІВ)
         if instance.operation_type == 'received':
             def check_full_payment():
                 try:
                     lead = Lead.objects.get(pk=instance.lead.pk)
-                    total_received = LeadPaymentOperation.objects.filter(
-                        lead=lead,
-                        operation_type='received'
-                    ).aggregate(total=models.Sum('amount'))['total'] or 0
 
-                    if lead.price and total_received >= lead.price and lead.status != 'completed':
-                        Lead.objects.filter(pk=lead.pk).update(
-                            status='completed',
-                            status_updated_at=timezone.now()
+                    # Перевіряємо чи лід може бути завершений
+                    if lead.status == 'on_the_way' and LeadStatusValidator.is_fully_paid(lead):
+                        can_complete, reason = LeadStatusValidator.can_transition(
+                            lead.status, 'completed', lead
                         )
-                        print(f"✅ Лід #{lead.pk} автозавершено через повну оплату")
+
+                        if can_complete:
+                            lead.status = 'completed'
+                            lead.status_updated_at = timezone.now()
+                            lead.save()  # ← ВИКЛИКАЄ СИГНАЛИ!
+
+                            print(f"✅ Лід #{lead.pk} автозавершено через повну оплату")
+                        else:
+                            print(f"⚠️ Лід #{lead.pk} повністю оплачений, але не може бути завершений: {reason}")
+
+                    # Логуємо поточний статус оплат
+                    payment_info = LeadStatusValidator.get_payment_info(lead)
+                    print(
+                        f"📊 Лід #{lead.pk}: оплачено {payment_info['received']} з {payment_info['price']} грн ({payment_info['payment_percentage']}%)")
+
                 except Exception as e:
                     print(f"❌ Помилка автозавершення: {e}")
 
             transaction.on_commit(check_full_payment)
+
+
+@receiver(pre_save, sender=Lead)
+def lead_status_change_logger(sender, instance, **kwargs):
+    """
+    Детальне логування змін статусів з фінансовою інформацією
+    """
+    if instance.pk:
+        try:
+            old_lead = Lead.objects.get(pk=instance.pk)
+
+            # Якщо статус змінився
+            if old_lead.status != instance.status:
+                instance.status_updated_at = timezone.now()
+
+                # Логуємо зміну з фінансовою інформацією
+                payment_info = LeadStatusValidator.get_payment_info(old_lead)
+
+                print(f"🔄 ЗМІНА СТАТУСУ ліда #{instance.pk}:")
+                print(f"   📊 {old_lead.full_name} ({old_lead.phone})")
+                print(
+                    f"   📈 {LeadStatusValidator.STATUS_NAMES.get(old_lead.status)} → {LeadStatusValidator.STATUS_NAMES.get(instance.status)}")
+                print(
+                    f"   💰 Оплата: {payment_info['received']}/{payment_info['price']} грн ({payment_info['payment_percentage']}%)")
+
+                # Попередження якщо намагаються завершити без повної оплати
+                if instance.status == 'completed' and not LeadStatusValidator.is_fully_paid(old_lead):
+                    print(f"⚠️ УВАГА: Завершення без повної оплати! Не вистачає {payment_info['shortage']} грн")
+
+        except Lead.DoesNotExist:
+            pass
+
 
 
 @receiver(post_save, sender=Client)
@@ -501,3 +532,33 @@ def daily_crm_activity_tracking(sender, instance, created, **kwargs):
 print("🚀 Розширені CRM сигнали зареєстровано!")
 
 
+@receiver(post_save, sender=Lead)
+def critical_states_monitor(sender, instance, created, **kwargs):
+    """
+    Моніторинг критичних станів лідів
+    """
+    if not created:  # Тільки для оновлень
+        def check_critical_states():
+            try:
+                payment_info = LeadStatusValidator.get_payment_info(instance)
+
+                # 🚨 Переплата
+                if payment_info['overpaid'] > 0:
+                    print(f"🚨 ПЕРЕПЛАТА: Лід #{instance.pk} переплачено на {payment_info['overpaid']} грн!")
+
+                # ⚠️ Лід в дорозі але не оплачений
+                if instance.status == 'on_the_way' and payment_info['shortage'] > 0:
+                    print(f"⚠️ УВАГА: Лід #{instance.pk} в дорозі, але не доплачено {payment_info['shortage']} грн")
+
+                # 💰 Лід готовий до завершення
+                if (instance.status == 'on_the_way' and
+                        LeadStatusValidator.is_fully_paid(instance)):
+                    print(f"✅ ГОТОВО: Лід #{instance.pk} можна завершувати - повністю оплачено!")
+
+            except Exception as e:
+                print(f"❌ Помилка моніторингу: {e}")
+
+        transaction.on_commit(check_critical_states)
+
+
+print("🚀 Оновлені Django signals з фінансовим контролем зареєстровано!")

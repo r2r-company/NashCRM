@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
@@ -28,6 +30,9 @@ from backend.services.lead_creation_service import create_lead_with_logic
 from rest_framework.parsers import MultiPartParser, FormParser
 
 # 🚀 УТИЛІТА ДЛЯ РОЗУМНОГО ОЧИЩЕННЯ КЕШУ
+from backend.validators.lead_status_validator import LeadStatusValidator, validate_lead_status_change
+
+
 def smart_cache_invalidation(lead_id=None, client_phone=None, manager_id=None):
     """
     Розумне очищення кешу - тільки пов'язані дані
@@ -250,7 +255,8 @@ class ClientViewSet(viewsets.ModelViewSet):
                     'count': stat['count'],
                     'total_spent': float(stat['total_spent'] or 0),
                     'avg_check': float(stat['avg_check'] or 0),
-                    'label': dict(Client.TEMPERATURE_CHOICES).get(temp, temp) if hasattr(Client, 'TEMPERATURE_CHOICES') else temp
+                    'label': dict(Client.TEMPERATURE_CHOICES).get(temp, temp) if hasattr(Client,
+                                                                                         'TEMPERATURE_CHOICES') else temp
                 }
 
             cache.set(cache_key, result, 300)
@@ -520,6 +526,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             'old_temperature': old_temperature,
             'new_temperature': new_temperature
         })
+
 
 # 🚀 ФУНКЦІЯ ПЕРЕВІРКИ ДУБЛІКАТІВ
 def check_duplicate_lead(phone, full_name=None, order_number=None, time_window_minutes=30):
@@ -955,7 +962,7 @@ class LeadViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['patch'], url_path='update-status/(?P<lead_id>[^/.]+)')
     def update_status(self, request, lead_id=None):
-        """🔄 PATCH /api/leads/update-status/{id}/"""
+        """🔄 PATCH /api/leads/update-status/{id}/ - З ФІНАНСОВИМ КОНТРОЛЕМ"""
         try:
             lead = Lead.objects.get(id=lead_id)
         except Lead.DoesNotExist:
@@ -963,29 +970,54 @@ class LeadViewSet(viewsets.ModelViewSet):
 
         new_status = request.data.get('status')
         if not new_status:
-            return Response({'error': 'Потрібно вказати статус'}, status=400)
+            return Response({
+                'error': 'Потрібно вказати статус',
+                'available_statuses': LeadStatusValidator.get_allowed_transitions(lead.status, lead)
+            }, status=400)
+
+        # 🔥 ВАЛІДАЦІЯ ЧЕРЕЗ ПРОФЕСІЙНИЙ ВАЛІДАТОР
+        validation = validate_lead_status_change(lead.id, new_status, request.user)
+
+        if not validation['allowed']:
+            return Response({
+                'error': validation['reason'],
+                'current_status': validation.get('current_status'),
+                'available_transitions': validation.get('available_transitions'),
+                'payment_info': validation.get('payment_info'),
+                'next_action': validation.get('next_action')
+            }, status=422)  # Unprocessable Entity
 
         old_status = lead.status
 
-        # Логіка переходів статусів
-        allowed_transitions = {
-            'queued': ['in_work', 'declined'],
-            'in_work': ['awaiting_packaging', 'declined'],
-            'awaiting_packaging': ['on_the_way', 'declined'],
-            'on_the_way': ['awaiting_cash', 'completed', 'declined'],
-            'awaiting_cash': ['completed'],
-            'completed': [],
-            'declined': [],
-        }
-
-        if new_status not in allowed_transitions.get(old_status, []):
-            return Response({
-                'error': f'Неможливо змінити статус з "{old_status}" на "{new_status}"',
-                'allowed_statuses': allowed_transitions.get(old_status, [])
-            }, status=422)
-
         try:
+            # 🔥 АВТОМАТИЧНІ ФІНАНСОВІ ОПЕРАЦІЇ ПРИ ЗМІНІ СТАТУСІВ
+
+            # При переході в "В дорозі" - створюємо очікувану операцію
+            if new_status == "on_the_way" and old_status != "on_the_way":
+                LeadPaymentOperation.objects.get_or_create(
+                    lead=lead,
+                    operation_type='expected',
+                    defaults={
+                        "amount": lead.price or 0,
+                        "comment": f"Очікується повна оплата за лід #{lead.id}"
+                    }
+                )
+                print(f"💰 Створено очікувану оплату для ліда #{lead.id}")
+
+            # При завершенні - перевіряємо повну оплату (додаткова страховка)
+            elif new_status == "completed":
+                payment_info = LeadStatusValidator.get_payment_info(lead)
+                if payment_info['shortage'] > 0:
+                    return Response({
+                        'error': f"Неможливо завершити - не вистачає {payment_info['shortage']} грн",
+                        'payment_info': payment_info
+                    }, status=422)
+
+                print(f"✅ Лід #{lead.id} завершено з повною оплатою")
+
+            # Зміна статусу
             lead.status = new_status
+            lead.status_updated_at = timezone.now()
             lead.save()
 
             # Розумне очищення кешу
@@ -994,34 +1026,24 @@ class LeadViewSet(viewsets.ModelViewSet):
                 manager_id=lead.assigned_to.id if lead.assigned_to else None
             )
 
-            # Автоматичні дії при зміні статусу
-            if new_status == "on_the_way":
-                LeadPaymentOperation.objects.get_or_create(
-                    lead=lead,
-                    operation_type='expected',
-                    defaults={
-                        "amount": lead.price,
-                        "comment": f"Очікується оплата за лід #{lead.id}"
-                    }
-                )
-            elif new_status == "completed":
-                LeadPaymentOperation.objects.create(
-                    lead=lead,
-                    operation_type='received',
-                    amount=lead.actual_cash or lead.price,
-                    comment=f"Отримано по завершенню ліда #{lead.id}"
-                )
-
-            return Response({
+            # Результат
+            result = {
                 'success': True,
-                'message': f'✅ Статус змінено: {old_status} → {new_status}',
+                'message': f'✅ Статус змінено: {LeadStatusValidator.STATUS_NAMES.get(old_status)} → {LeadStatusValidator.STATUS_NAMES.get(new_status)}',
                 'lead_id': lead.id,
                 'old_status': old_status,
-                'new_status': new_status
-            })
+                'new_status': new_status,
+                'payment_info': LeadStatusValidator.get_payment_info(lead),
+                'next_action': LeadStatusValidator.get_next_required_action(lead)
+            }
+
+            return Response(result)
 
         except Exception as e:
-            return Response({'error': str(e)}, status=500)
+            return Response({
+                'error': f'Помилка при зміні статусу: {str(e)}',
+                'details': str(e)
+            }, status=500)
 
     @action(detail=False, methods=['post'], url_path='add-payment/(?P<lead_id>[^/.]+)')
     def add_payment(self, request, lead_id=None):
@@ -1150,51 +1172,81 @@ class LeadViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='available-statuses/(?P<lead_id>[^/.]+)')
     def available_statuses(self, request, lead_id=None):
-        """📋 GET /api/leads/available-statuses/{id}/"""
+        """📋 GET /api/leads/available-statuses/{id}/ - З ФІНАНСОВОЮ ІНФОРМАЦІЄЮ"""
         try:
             lead = Lead.objects.get(id=lead_id)
         except Lead.DoesNotExist:
             return Response({'error': 'Лід не знайдено'}, status=404)
 
         current_status = lead.status
-        allowed_transitions = {
-            'queued': ['in_work', 'declined'],
-            'in_work': ['awaiting_packaging', 'declined'],
-            'awaiting_packaging': ['on_the_way', 'declined'],
-            'on_the_way': ['awaiting_cash', 'completed', 'declined'],
-            'awaiting_cash': ['completed'],
-            'completed': [],
-            'declined': [],
-        }
-
-        status_descriptions = {
-            'queued': 'У черзі',
-            'in_work': 'Обробляється менеджером',
-            'awaiting_prepayment': 'Очікую аванс',
-            'preparation': 'В роботу',
-            'warehouse_processing': 'Склад',
-            'on_the_way': 'В дорозі',
-            'completed': 'Завершено',
-            'declined': 'Відмовлено'
-        }
-
-        available = allowed_transitions.get(current_status, [])
+        allowed_transitions = LeadStatusValidator.get_allowed_transitions(current_status, lead)
+        payment_info = LeadStatusValidator.get_payment_info(lead)
 
         return Response({
             'lead_id': lead.id,
             'lead_name': lead.full_name,
             'current_status': {
                 'code': current_status,
-                'description': status_descriptions.get(current_status, current_status)
+                'name': LeadStatusValidator.STATUS_NAMES.get(current_status)
             },
             'available_statuses': [
                 {
-                    'code': status_code,
-                    'description': status_descriptions.get(status_code, status_code)
+                    'code': status,
+                    'name': LeadStatusValidator.STATUS_NAMES.get(status),
+                    'description': LeadStatusValidator._get_transition_description(current_status, status)
                 }
-                for status_code in available
+                for status in allowed_transitions
             ],
-            'is_final': len(available) == 0
+            'payment_info': {
+                'price': float(payment_info['price']),
+                'received': float(payment_info['received']),
+                'shortage': float(payment_info['shortage']),
+                'percentage': payment_info['payment_percentage'],
+                'is_fully_paid': LeadStatusValidator.is_fully_paid(lead)
+            },
+            'next_action': LeadStatusValidator.get_next_required_action(lead),
+            'is_final': len(allowed_transitions) == 0
+        })
+
+    @action(detail=False, methods=['patch'], url_path='update-price/(?P<lead_id>[^/.]+)')
+    def update_price(self, request, lead_id=None):
+        """💰 PATCH /api/leads/update-price/{id}/ - Оновлення ціни (для адміна)"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({'error': 'Лід не знайдено'}, status=404)
+
+        # Тільки в статусі preparation можна міняти ціну
+        if lead.status != 'preparation':
+            return Response({
+                'error': f'Ціну можна змінювати тільки в статусі "В роботу (адмін)", поточний: {LeadStatusValidator.STATUS_NAMES.get(lead.status)}'
+            }, status=422)
+
+        new_price = request.data.get('price')
+        if not new_price:
+            return Response({'error': 'Потрібно вказати ціну'}, status=400)
+
+        try:
+            new_price = Decimal(str(new_price))
+            if new_price < 0:
+                return Response({'error': 'Ціна не може бути від\'ємною'}, status=400)
+        except:
+            return Response({'error': 'Невірний формат ціни'}, status=400)
+
+        old_price = lead.price
+        lead.price = new_price
+        lead.save()
+
+        # Очищуємо кеш
+        smart_cache_invalidation(lead_id=lead.id)
+
+        return Response({
+            'success': True,
+            'message': f'Ціну оновлено: {old_price} → {new_price} грн',
+            'lead_id': lead.id,
+            'old_price': float(old_price or 0),
+            'new_price': float(new_price),
+            'payment_info': LeadStatusValidator.get_payment_info(lead)
         })
 
 
@@ -1442,7 +1494,6 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
                 for task in overdue
             ]
         })
-
 
 
 # 🔥 НОВИЙ API ДЛЯ CRM ДАШБОРДУ
@@ -1706,9 +1757,11 @@ def client_segments_for_marketing(request):
 
 def get_viewset_method(viewset_class, method_name):
     """Допоміжна функція для використання ViewSet методів як окремих view"""
+
     def view_func(request, **kwargs):
         viewset = viewset_class()
         viewset.request = request
         viewset.format_kwarg = None
         return getattr(viewset, method_name)(request, **kwargs)
+
     return view_func
