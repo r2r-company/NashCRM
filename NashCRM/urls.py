@@ -18,13 +18,12 @@ from django.contrib import admin
 from django.urls import path, include
 
 from backend import views
-from backend.views import leads_report_page, map_search_view
+from backend.views import  map_search_view
 from django.conf import settings
 from django.conf.urls.static import static
 
 urlpatterns = [
     path('', views.home, name="home"),
-    path("admin/report/leads/", admin.site.admin_view(leads_report_page), name="admin_leads_report"),
     path("admin/map-search/", map_search_view, name="map_search"),
 
     path('admin/', admin.site.urls),
