@@ -11,7 +11,7 @@ from backend.views import (
     ClientInteractionViewSet, ClientTaskViewSet,
     crm_dashboard, update_all_client_metrics,
     create_follow_up_tasks, client_segments_for_marketing,
-    CreateLeadView, check_lead_duplicate, map_config_api
+    CreateLeadView, check_lead_duplicate, map_config_api, lead_statuses
 )
 
 # 🚀 Стандартний роутер Django REST Framework
@@ -67,6 +67,8 @@ urlpatterns = [
     # 📊 ADMIN PAGES
     path('reports/leads/', leads_report_page, name='leads_report_page'),
     path('admin/map-search/', map_search_view, name='map_search'),
+
+    path('statuses/', lead_statuses, name='lead_statuses'),
 
     # 🚀 ROUTER URLS (має бути в кінці)
     path('', include(router.urls)),

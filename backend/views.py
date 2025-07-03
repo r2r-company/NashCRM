@@ -4177,3 +4177,31 @@ def get_viewset_method(viewset_class, method_name):
     view_func.__doc__ = f"Wrapped ViewSet method: {viewset_class.__name__}.{method_name}"
 
     return view_func
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def lead_statuses(request):
+    """📊 Отримання всіх можливих статусів лідів"""
+
+    # Отримуємо всі статуси з моделі Lead
+    status_choices = Lead.STATUS_CHOICES
+
+    # Формуємо список статусів
+    statuses_data = [
+        {
+            "code": status_code,
+            "name": status_name
+        }
+        for status_code, status_name in status_choices
+    ]
+
+    return api_response(
+        data={
+            "statuses": statuses_data
+        },
+        meta={
+            "total_statuses": len(status_choices),
+            "generated_at": timezone.now()
+        }
+    )
