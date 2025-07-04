@@ -13,20 +13,20 @@ from typing import List, Tuple, Optional
 
 class LeadStatusValidator:
     """
-    Валідатор статусів заявок з контролем оплат
+    Валідатор статусів заявок з контролем оплат та ціни
     """
 
     # 🆕 ОНОВЛЕНА ПОСЛІДОВНІСТЬ СТАТУСІВ
     STATUS_FLOW = [
-        'queued',                  # 0 - У черзі
-        'in_work',                 # 1 - Менеджер обробляє
-        'awaiting_prepayment',     # 2 - Очікую аванс
-        'preparation',             # 3 - Адмін в роботі
-        'warehouse_processing',    # 4 - Обробка на складі
-        'warehouse_ready',         # 5 - 🆕 Склад - готовий до відгрузки
-        'on_the_way',             # 6 - В дорозі
-        'completed',              # 7 - Завершено
-        'declined'                # 8 - Відмовлено
+        'queued',  # 0 - У черзі
+        'in_work',  # 1 - Менеджер обробляє
+        'awaiting_prepayment',  # 2 - Очікую аванс
+        'preparation',  # 3 - Адмін в роботі
+        'warehouse_processing',  # 4 - Обробка на складі
+        'warehouse_ready',  # 5 - 🆕 Склад - готовий до відгрузки
+        'on_the_way',  # 6 - В дорозі
+        'completed',  # 7 - Завершено
+        'declined'  # 8 - Відмовлено
     ]
 
     # 🆕 ОНОВЛЕНІ НАЗВИ СТАТУСІВ
@@ -70,11 +70,14 @@ class LeadStatusValidator:
                 if lead.price and lead.price > 0 and cls.is_fully_paid(lead):
                     allowed.append(next_status)
 
-            # Перевірка для warehouse_processing (потрібні записи про оплату)
+            # 🔥 ПЕРЕВІРКА ДЛЯ warehouse_processing (потрібні ціна + записи про оплату)
             elif next_status == 'warehouse_processing' and lead and current_status == 'preparation':
-                has_any_payment_record = LeadPaymentOperation.objects.filter(lead=lead).exists()
-                if has_any_payment_record:
-                    allowed.append(next_status)
+                # ПЕРЕВІРЯЄМО ЦІНУ СПОЧАТКУ
+                if lead.price and lead.price > 0:
+                    has_any_payment_record = LeadPaymentOperation.objects.filter(lead=lead).exists()
+                    if has_any_payment_record:
+                        allowed.append(next_status)
+                # Якщо немає ціни - НЕ додаємо в allowed
 
             # 🆕 НОВИЙ СТАТУС: warehouse_ready
             elif next_status == 'warehouse_ready':
@@ -168,7 +171,6 @@ class LeadStatusValidator:
 
         return descriptions.get((from_status, to_status), f"Перейти в {cls.STATUS_NAMES.get(to_status)}")
 
-    # Всі інші методи залишаються без змін...
     @classmethod
     def can_transition(cls, current_status: str, new_status: str, lead: Lead = None) -> Tuple[bool, str]:
         """
@@ -192,8 +194,13 @@ class LeadStatusValidator:
                 shortage = payment_info['price'] - payment_info['received']
                 return False, f"Неможливо завершити - не вистачає {shortage} грн для повної оплати"
 
-        # Валідація для warehouse_processing
+        # 🔥 ВАЛІДАЦІЯ ДЛЯ warehouse_processing (ЦІНА + ПЛАТЕЖІ)
         if current_status == 'preparation' and new_status == 'warehouse_processing' and lead:
+            # ПЕРЕВІРКА ЦІНИ СПОЧАТКУ
+            if not lead.price or lead.price <= 0:
+                return False, f"Неможливо передати на склад без встановленої ціни ліда"
+
+            # ПОТІМ ПЕРЕВІРКА ПЛАТІЖНИХ ЗАПИСІВ
             has_any_payment_record = LeadPaymentOperation.objects.filter(lead=lead).exists()
             if not has_any_payment_record:
                 return False, f"Неможливо передати на склад - немає записів про оплату"
@@ -271,6 +278,89 @@ class LeadStatusValidator:
 
         return result
 
+    @classmethod
+    def get_detailed_requirements(cls, current_status: str, target_status: str, lead: Lead = None) -> dict:
+        """
+        🔥 НОВИЙ МЕТОД: Детальні вимоги для переходу між статусами
+        """
+        requirements = {
+            'status_transition': f"{cls.STATUS_NAMES.get(current_status)} → {cls.STATUS_NAMES.get(target_status)}",
+            'requirements': [],
+            'current_state': {},
+            'missing': [],
+            'blocking_factors': []
+        }
+
+        if not lead:
+            requirements['blocking_factors'].append("Лід не знайдено")
+            return requirements
+
+        # Загальні вимоги для переходу на склад
+        if current_status == 'preparation' and target_status == 'warehouse_processing':
+            # Перевіряємо ціну
+            price_ok = lead.price and lead.price > 0
+            requirements['requirements'].extend([
+                f"Встановлена ціна ліда > 0",
+                f"Мінімум один запис у платіжних операціях"
+            ])
+
+            requirements['current_state'] = {
+                'price': float(lead.price or 0),
+                'price_set': price_ok,
+                'payment_records_count': LeadPaymentOperation.objects.filter(lead=lead).count()
+            }
+
+            if not price_ok:
+                requirements['missing'].append("Ціна ліда не встановлена або = 0")
+                requirements['blocking_factors'].append("Встановіть ціну ліда в полі 'price'")
+
+            if not LeadPaymentOperation.objects.filter(lead=lead).exists():
+                requirements['missing'].append("Немає записів про платежі")
+                requirements['blocking_factors'].append(
+                    f"Додайте платіжний запис через POST /api/leads/{lead.id}/add-payment/")
+
+        # Вимоги для завершення
+        elif target_status == 'completed':
+            payment_info = cls.get_payment_info(lead)
+            fully_paid = cls.is_fully_paid(lead)
+
+            requirements['requirements'].extend([
+                f"Ціна ліда > 0",
+                f"Повна оплата ({payment_info['price']} грн)"
+            ])
+
+            requirements['current_state'] = {
+                'price': float(payment_info['price']),
+                'received': float(payment_info['received']),
+                'shortage': float(payment_info['shortage']),
+                'payment_percentage': payment_info['payment_percentage'],
+                'fully_paid': fully_paid
+            }
+
+            if payment_info['price'] <= 0:
+                requirements['missing'].append("Ціна ліда не встановлена")
+                requirements['blocking_factors'].append("Встановіть ціну ліда")
+
+            if not fully_paid:
+                requirements['missing'].append(f"Не вистачає {payment_info['shortage']} грн")
+                requirements['blocking_factors'].append(f"Додайте платіж на суму {payment_info['shortage']} грн")
+
+        return requirements
+
+def get_lead_requirements(lead_id: int, target_status: str) -> dict:
+    """
+    🔥 НОВА ФУНКЦІЯ: Отримати детальні вимоги для переходу
+    """
+    try:
+        lead = Lead.objects.get(id=lead_id)
+        return LeadStatusValidator.get_detailed_requirements(lead.status, target_status, lead)
+    except Lead.DoesNotExist:
+        return {
+            'error': 'LEAD_NOT_FOUND',
+            'message': f'Лід з ID {lead_id} не знайдено'
+        }
+
+
 
 # Допоміжна функція для використання в views
 def validate_lead_status_change(lead_id: int, new_status: str, user=None) -> dict:
@@ -286,3 +376,6 @@ def validate_lead_status_change(lead_id: int, new_status: str, user=None) -> dic
             'reason': f'Лід з ID {lead_id} не знайдено',
             'error': 'LEAD_NOT_FOUND'
         }
+
+
+# Допоміжна функція для використання в views

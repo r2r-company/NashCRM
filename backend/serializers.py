@@ -1,9 +1,12 @@
+# backend/serializers.py - ОНОВЛЕНИЙ LeadSerializer
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import Lead, Client, CustomUser, LeadFile, ClientInteraction, ClientTask
+from .validators.lead_status_validator import LeadStatusValidator, validate_lead_status_change
 
 
 class LeadFileSerializer(serializers.ModelSerializer):
@@ -11,15 +14,230 @@ class LeadFileSerializer(serializers.ModelSerializer):
         model = LeadFile
         fields = ['id', 'file', 'uploaded_at']
 
+
 class LeadSerializer(serializers.ModelSerializer):
     assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True)
-    files = LeadFileSerializer(many=True, read_only=True)  # ← тут
+    files = LeadFileSerializer(many=True, read_only=True)
+
+    # 🚀 ДОДАЄМО ПОЛЯ ДЛЯ ВАЛІДАЦІЇ СТАТУСІВ
+    available_statuses = serializers.SerializerMethodField(read_only=True)
+    payment_info = serializers.SerializerMethodField(read_only=True)
+    next_action = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Lead
         fields = '__all__'
 
+    def get_available_statuses(self, obj):
+        """Доступні статуси для переходу"""
+        if obj and obj.status:
+            allowed = LeadStatusValidator.get_allowed_transitions(obj.status, obj)
+            return [
+                {
+                    'code': status,
+                    'name': LeadStatusValidator.STATUS_NAMES.get(status, status)
+                }
+                for status in allowed
+            ]
+        return []
 
+    def get_payment_info(self, obj):
+        """Інформація про платежі"""
+        if obj:
+            return LeadStatusValidator.get_payment_info(obj)
+        return {}
+
+    def get_next_action(self, obj):
+        """Наступна дія для ліда"""
+        if obj:
+            return LeadStatusValidator.get_next_required_action(obj)
+        return ""
+
+    def validate_status(self, value):
+        """🔥 ВАЛІДАЦІЯ СТАТУСУ ПРИ ОНОВЛЕННІ"""
+        # Тільки для існуючих лідів (update)
+        if self.instance:
+            current_status = self.instance.status
+
+            # Якщо статус не змінюється - все ок
+            if current_status == value:
+                return value
+
+            print(f"🔍 ВАЛІДАЦІЯ: {current_status} → {value}")
+
+            # Перевіряємо чи можливий перехід
+            can_transition, reason = LeadStatusValidator.can_transition(
+                current_status, value, self.instance
+            )
+
+            if not can_transition:
+                print(f"❌ ВАЛІДАЦІЯ НЕ ПРОЙШЛА: {reason}")
+
+                # 🔥 ДЕТАЛЬНЕ ПОЯСНЕННЯ ДЛЯ КОРИСТУВАЧА
+                available_transitions = LeadStatusValidator.get_allowed_transitions(current_status, self.instance)
+
+                # Спеціальне пояснення для конкретних випадків
+                detailed_explanation = self._get_detailed_status_explanation(current_status, value, self.instance)
+
+                raise serializers.ValidationError({
+                    'status': {
+                        'error_type': 'STATUS_TRANSITION_BLOCKED',
+                        'message': reason,
+                        'detailed_explanation': detailed_explanation,
+                        'current_status': {
+                            'code': current_status,
+                            'name': LeadStatusValidator.STATUS_NAMES.get(current_status)
+                        },
+                        'attempted_status': {
+                            'code': value,
+                            'name': LeadStatusValidator.STATUS_NAMES.get(value)
+                        },
+                        'available_statuses': [
+                            {
+                                'code': status,
+                                'name': LeadStatusValidator.STATUS_NAMES.get(status),
+                                'description': LeadStatusValidator._get_transition_description(current_status, status)
+                            }
+                            for status in available_transitions
+                        ],
+                        'required_action': LeadStatusValidator.get_next_required_action(self.instance),
+                        'business_rules': self._get_business_rules_explanation(current_status, value)
+                    }
+                })
+
+            print(f"✅ ВАЛІДАЦІЯ ПРОЙШЛА: {reason}")
+
+        return value
+
+    def validate(self, attrs):
+        """Додаткова валідація для повного об'єкта"""
+        # Якщо це оновлення і змінюється статус
+        if self.instance and 'status' in attrs:
+            new_status = attrs['status']
+
+            # Спеціальна перевірка для completed
+            if new_status == 'completed':
+                # Перевіряємо чи є ціна
+                price = attrs.get('price', self.instance.price)
+                if not price or price <= 0:
+                    raise serializers.ValidationError({
+                        'status': 'Неможливо завершити лід без встановленої ціни'
+                    })
+
+                # Перевіряємо чи є повна оплата
+                if not LeadStatusValidator.is_fully_paid(self.instance):
+                    payment_info = LeadStatusValidator.get_payment_info(self.instance)
+                    raise serializers.ValidationError({
+                        'status': f'Неможливо завершити - не вистачає {payment_info["shortage"]} грн',
+                        'payment_details': payment_info
+                    })
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        """🔥 ПЕРЕПИСУЄМО МЕТОД UPDATE ДЛЯ ЛОГУВАННЯ"""
+        old_status = instance.status
+        new_status = validated_data.get('status', old_status)
+
+        print(f"📝 СЕРІАЛІЗАТОР UPDATE: Лід #{instance.pk}")
+        print(f"   Статус: {old_status} → {new_status}")
+
+        # Виконуємо стандартне оновлення
+        updated_instance = super().update(instance, validated_data)
+
+        # Якщо статус змінився - логуємо
+        if old_status != new_status:
+            print(f"✅ СТАТУС ЗМІНЕНО: #{updated_instance.pk} - {old_status} → {new_status}")
+            print(f"   Django signals спрацюють автоматично!")
+
+        return updated_instance
+
+    def _get_detailed_status_explanation(self, current_status: str, attempted_status: str, lead) -> str:
+        """
+        🔥 ДЕТАЛЬНЕ ПОЯСНЕННЯ ЧОМУ ПЕРЕХІД НЕМОЖЛИВИЙ
+        """
+        if current_status == 'preparation' and attempted_status == 'warehouse_processing':
+            # Перевіряємо чи є платіжні записи
+            from backend.models import LeadPaymentOperation
+            has_payments = LeadPaymentOperation.objects.filter(lead=lead).exists()
+
+            if not has_payments:
+                return (
+                    "❌ Неможливо передати на склад без фінансових записів!\n\n"
+                    "📋 Що потрібно зробити:\n"
+                    "1. Додайте запис про очікувану оплату:\n"
+                    f"   POST /api/leads/{lead.id}/add-payment/\n"
+                    "   {\n"
+                    "     \"operation_type\": \"expected\",\n"
+                    f"     \"amount\": {lead.price or 'ЦІНА_ЛІДА'},\n"
+                    "     \"comment\": \"Очікується оплата від клієнта\"\n"
+                    "   }\n\n"
+                    "2. Після цього можна буде передати на склад\n\n"
+                    "💡 Це захищає від відправки товару без фінансового контролю"
+                )
+
+        elif attempted_status == 'completed':
+            payment_info = LeadStatusValidator.get_payment_info(lead)
+            if payment_info['shortage'] > 0:
+                return (
+                    f"❌ Неможливо завершити - не вистачає {payment_info['shortage']} грн!\n\n"
+                    "📋 Що потрібно зробити:\n"
+                    "1. Додайте платіж від клієнта:\n"
+                    f"   POST /api/leads/{lead.id}/add-payment/\n"
+                    "   {\n"
+                    "     \"operation_type\": \"received\",\n"
+                    f"     \"amount\": {payment_info['shortage']},\n"
+                    "     \"comment\": \"Доплата від клієнта\"\n"
+                    "   }\n\n"
+                    f"💰 Поточний стан оплат:\n"
+                    f"   Ціна ліда: {payment_info['price']} грн\n"
+                    f"   Отримано: {payment_info['received']} грн\n"
+                    f"   Не вистачає: {payment_info['shortage']} грн"
+                )
+
+        elif current_status == 'queued' and attempted_status not in ['in_work', 'declined']:
+            return (
+                "❌ З черги можна перейти тільки в роботу або відмовити!\n\n"
+                "📋 Правильна послідовність:\n"
+                "1. queued → in_work (менеджер бере в роботу)\n"
+                "2. in_work → awaiting_prepayment (передача на оплату)\n"
+                "3. awaiting_prepayment → preparation (після отримання авансу)\n\n"
+                "💡 Не можна 'перестрибувати' через етапи!"
+            )
+
+        return f"Перехід з '{LeadStatusValidator.STATUS_NAMES.get(current_status)}' в '{LeadStatusValidator.STATUS_NAMES.get(attempted_status)}' заборонений бізнес-правилами"
+
+    def _get_business_rules_explanation(self, current_status: str, attempted_status: str) -> dict:
+        """
+        🔥 ПОЯСНЕННЯ БІЗНЕС-ПРАВИЛ
+        """
+        rules = {
+            'preparation_to_warehouse': {
+                'rule': 'Перед передачею на склад потрібні фінансові записи',
+                'reason': 'Захист від відправки товару без контролю оплат',
+                'required': 'Мінімум один запис у LeadPaymentOperation'
+            },
+            'any_to_completed': {
+                'rule': 'Завершення тільки при повній оплаті',
+                'reason': 'Фінансовий контроль - не можна завершувати борги',
+                'required': 'Сума отриманих платежів >= ціна ліда'
+            },
+            'sequential_flow': {
+                'rule': 'Послідовний перехід по етапах',
+                'reason': 'Кожен етап має свої завдання та відповідальних',
+                'required': 'Не можна перестрибувати через етапи'
+            }
+        }
+
+        if current_status == 'preparation' and attempted_status == 'warehouse_processing':
+            return rules['preparation_to_warehouse']
+        elif attempted_status == 'completed':
+            return rules['any_to_completed']
+        else:
+            return rules['sequential_flow']
+
+
+# Всі інші серіалізатори залишаються без змін...
 class ClientSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.CharField(source='assigned_to.username', read_only=True)
     temperature_display = serializers.CharField(source='get_temperature_display', read_only=True)
@@ -104,7 +322,6 @@ class ExternalLeadSerializer(serializers.ModelSerializer):
         ]
 
 
-
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
@@ -128,8 +345,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         return data
 
 
-
 User = get_user_model()
+
 
 class ManagerSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username')
@@ -178,7 +395,6 @@ class ManagerSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         return instance
-
 
 
 class CustomUserSerializer(serializers.ModelSerializer):
