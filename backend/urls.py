@@ -1,3 +1,5 @@
+# backend/urls.py - ВИПРАВЛЕННЯ
+
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -71,8 +73,9 @@ urlpatterns = [
     # 📋 LEGACY ENDPOINTS (для зворотної сумісності)
     path('managers/list/', list_managers, name='list_managers_legacy'),
 
-    # 📊 ADMIN PAGES
-    path('reports/leads/', leads_report_page, name='leads_report_page'),
+    # 🔥 ADMIN PAGES - ОСЬ ВИПРАВЛЕННЯ!
+    path('admin/leads-report/', leads_report_page, name='admin_leads_report'),  # ← ЗМІНЕНО ІМ'Я!
+    path('reports/leads/', leads_report_page, name='leads_report_page'),        # ← ЗАЛИШИЛИ СТАРЕ для сумісності
     path('admin/map-search/', map_search_view, name='map_search'),
 
     # 📊 GENERAL INFO
@@ -81,3 +84,4 @@ urlpatterns = [
     # 🚀 ROUTER URLS (має бути в кінці)
     path('', include(router.urls)),
 ]
+
