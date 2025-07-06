@@ -10,7 +10,7 @@ from django.utils.dateparse import parse_date
 from django.utils.timezone import now
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -215,6 +215,8 @@ def home(request):
 class MyTokenObtainPairView(TokenObtainPairView):
     """🔐 Отримання JWT токенів з розширеною інформацією"""
     serializer_class = MyTokenObtainPairSerializer
+    permission_classes = [AllowAny]  # 🔥 ДОДАЙТЕ ЦЮ СТРОКУ!
+
 
     def post(self, request, *args, **kwargs):
         # Викликаємо батьківський метод
@@ -273,6 +275,7 @@ class MyTokenObtainPairView(TokenObtainPairView):
 
 class LoginView(APIView):
     """🔐 Стандартна авторизація з детальною відповіддю"""
+    permission_classes = [AllowAny]
 
     def post(self, request):
         username = request.data.get("username")

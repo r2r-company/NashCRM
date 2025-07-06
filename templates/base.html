@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nash CRM & ERP System</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>Nash CRM API - Інтерактивна документація</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -12,628 +15,2242 @@
             box-sizing: border-box;
         }
 
-        body {
-            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #333;
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --neon-gradient: linear-gradient(45deg, #00ff88, #00d4ff);
+            --cyber-gradient: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+            --matrix-green: #00ff41;
+            --electric-blue: #00d4ff;
+            --cyber-pink: #ff006e;
+            --neon-yellow: #ffff00;
+
+            --glass-bg: rgba(255, 255, 255, 0.03);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --dark-glass: rgba(0, 0, 0, 0.3);
         }
 
-        .container {
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--cyber-gradient);
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
+            color: #ffffff;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Matrix Background Effect */
+        #matrix-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -3;
+            opacity: 0.1;
+        }
+
+        /* Cyber Grid Background */
+        .cyber-grid {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -2;
+            background-image:
+                linear-gradient(rgba(0, 255, 65, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 255, 65, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            animation: grid-move 20s linear infinite;
+        }
+
+        @keyframes grid-move {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(40px, 40px); }
+        }
+
+        /* Floating Particles */
+        .particles-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: var(--matrix-green);
+            border-radius: 50%;
+            animation: float-particle 15s linear infinite;
+            opacity: 0.6;
+        }
+
+        @keyframes float-particle {
+            0% { transform: translateY(100vh) translateX(0); opacity: 0; }
+            10% { opacity: 0.6; }
+            90% { opacity: 0.6; }
+            100% { transform: translateY(-10vh) translateX(100px); opacity: 0; }
         }
 
         /* Header */
         .header {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 1rem 2rem;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(30px);
+            border-bottom: 2px solid rgba(0, 255, 65, 0.3);
+            padding: 1rem 0;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 10px 40px rgba(0, 255, 65, 0.1);
+        }
+
+        .nav-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
 
         .logo {
             display: flex;
             align-items: center;
-            gap: 12px;
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #667eea;
-        }
-
-        .logo i {
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-size: 2rem;
-        }
-
-        .user-info {
-            display: flex;
-            align-items: center;
             gap: 1rem;
-            background: rgba(102, 126, 234, 0.1);
-            padding: 0.5rem 1rem;
-            border-radius: 50px;
-            border: 1px solid rgba(102, 126, 234, 0.2);
+            font-size: 1.8rem;
+            font-weight: 900;
+            color: var(--matrix-green);
+            text-shadow: 0 0 20px var(--matrix-green);
         }
 
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+        .logo-icon {
+            width: 50px;
+            height: 50px;
+            background: var(--neon-gradient);
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
-            font-weight: 600;
+            color: #000;
+            font-size: 1.5rem;
+            animation: glow-pulse 3s ease-in-out infinite;
+            position: relative;
         }
 
-        /* Main Content */
-        .main-content {
-            flex: 1;
-            padding: 2rem;
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 2rem;
-            max-width: 1400px;
-            margin: 0 auto;
-            width: 100%;
+        .logo-icon::after {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: var(--neon-gradient);
+            border-radius: 12px;
+            z-index: -1;
+            filter: blur(5px);
+            opacity: 0.7;
         }
 
-        /* Quick Stats Cards */
-        .stats-grid {
-            grid-column: 1 / -1;
+        @keyframes glow-pulse {
+            0%, 100% { box-shadow: 0 0 20px var(--matrix-green); }
+            50% { box-shadow: 0 0 40px var(--matrix-green), 0 0 60px var(--electric-blue); }
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 50px;
+            padding: 0.75rem 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .status-indicator:hover {
+            background: rgba(0, 255, 65, 0.1);
+            border-color: var(--matrix-green);
+            transform: translateY(-2px);
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background: var(--matrix-green);
+            border-radius: 50%;
+            animation: pulse-status 2s infinite;
+            box-shadow: 0 0 10px var(--matrix-green);
+        }
+
+        @keyframes pulse-status {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.7; }
+        }
+
+        /* Hero Section */
+        .hero {
+            text-align: center;
+            padding: 4rem 2rem;
+            position: relative;
+        }
+
+        .hero-title {
+            font-size: 4rem;
+            font-weight: 900;
+            background: var(--neon-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 1rem;
+            text-shadow: 0 0 50px rgba(0, 255, 65, 0.5);
+            animation: title-glow 4s ease-in-out infinite;
+        }
+
+        @keyframes title-glow {
+            0%, 100% { filter: brightness(1) contrast(1); }
+            50% { filter: brightness(1.2) contrast(1.1); }
+        }
+
+        .hero-subtitle {
+            font-size: 1.4rem;
+            color: rgba(255, 255, 255, 0.8);
+            max-width: 800px;
+            margin: 0 auto 3rem;
+            line-height: 1.6;
+            font-weight: 300;
+        }
+
+        /* API Stats */
+        .api-stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto 4rem;
+            padding: 0 2rem;
         }
 
         .stat-card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
+            background: var(--glass-bg);
+            backdrop-filter: blur(30px);
+            border: 1px solid var(--glass-border);
             border-radius: 20px;
             padding: 2rem;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            text-align: center;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
             overflow: hidden;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
         }
 
         .stat-card::before {
             content: '';
             position: absolute;
             top: 0;
+            left: -100%;
+            width: 100%;
+            height: 2px;
+            background: var(--neon-gradient);
+            transition: all 0.6s ease;
+        }
+
+        .stat-card:hover::before {
+            left: 0;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-10px) scale(1.02);
+            background: rgba(0, 255, 65, 0.05);
+            border-color: var(--matrix-green);
+            box-shadow: 0 20px 60px rgba(0, 255, 65, 0.2);
+        }
+
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--matrix-green);
+            margin-bottom: 0.5rem;
+            text-shadow: 0 0 20px var(--matrix-green);
+        }
+
+        .stat-label {
+            color: rgba(255, 255, 255, 0.7);
+            font-weight: 500;
+            font-size: 1.1rem;
+        }
+
+        /* API Tester */
+        .api-tester {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 2rem 4rem;
+        }
+
+        .tester-card {
+            background: var(--dark-glass);
+            backdrop-filter: blur(30px);
+            border: 2px solid rgba(0, 255, 65, 0.2);
+            border-radius: 25px;
+            padding: 3rem;
+            margin-bottom: 3rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tester-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
             left: 0;
             right: 0;
             height: 4px;
-            background: linear-gradient(90deg, #667eea, #764ba2);
+            background: var(--neon-gradient);
+            animation: border-glow 3s ease-in-out infinite;
         }
 
-        .stat-header {
+        @keyframes border-glow {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; box-shadow: 0 0 20px var(--matrix-green); }
+        }
+
+        .tester-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .tester-icon {
+            width: 60px;
+            height: 60px;
+            background: var(--neon-gradient);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #000;
+            font-size: 1.5rem;
+            font-weight: bold;
+            animation: icon-pulse 2s infinite;
+        }
+
+        @keyframes icon-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .tester-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--matrix-green);
+            text-shadow: 0 0 15px var(--matrix-green);
+        }
+
+        /* Token Input */
+        .token-section {
+            margin-bottom: 2rem;
+        }
+
+        .token-input-group {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .token-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.5);
+            border: 2px solid rgba(0, 255, 65, 0.3);
+            border-radius: 12px;
+            padding: 1rem 1.5rem;
+            color: var(--matrix-green);
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .token-input:focus {
+            outline: none;
+            border-color: var(--matrix-green);
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+            background: rgba(0, 255, 65, 0.05);
+        }
+
+        .cyber-button {
+            background: var(--neon-gradient);
+            border: none;
+            border-radius: 12px;
+            padding: 1rem 2rem;
+            color: #000;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .cyber-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(0, 255, 65, 0.4);
+        }
+
+        .cyber-button:active {
+            transform: translateY(-1px);
+        }
+
+        .cyber-button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            transition: all 0.6s ease;
+        }
+
+        .cyber-button:hover::before {
+            left: 100%;
+        }
+
+        /* Action Buttons Grid */
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .action-btn {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(0, 255, 65, 0.3);
+            border-radius: 12px;
+            padding: 1rem;
+            color: var(--matrix-green);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 600;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .action-btn:hover {
+            background: rgba(0, 255, 65, 0.1);
+            border-color: var(--matrix-green);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0, 255, 65, 0.2);
+        }
+
+        .action-btn i {
+            font-size: 1.2rem;
+            width: 20px;
+            text-align: center;
+        }
+
+        /* Results Display */
+        .results-container {
+            margin-top: 2rem;
+            display: none;
+        }
+
+        .results-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 1rem;
         }
 
-        .stat-icon {
-            width: 50px;
-            height: 50px;
-            border-radius: 12px;
+        .results-title {
+            color: var(--matrix-green);
+            font-size: 1.4rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .view-toggle {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .toggle-btn {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(0, 255, 65, 0.3);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            color: var(--matrix-green);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9rem;
+        }
+
+        .toggle-btn.active {
+            background: var(--neon-gradient);
+            color: #000;
+            border-color: transparent;
+        }
+
+        .chart-container {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(0, 255, 65, 0.2);
+            border-radius: 15px;
+            padding: 2rem;
+            margin-bottom: 1rem;
+            min-height: 400px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.5rem;
-            color: white;
         }
 
-        .stat-icon.leads { background: linear-gradient(45deg, #667eea, #764ba2); }
-        .stat-icon.clients { background: linear-gradient(45deg, #f093fb, #f5576c); }
-        .stat-icon.revenue { background: linear-gradient(45deg, #4facfe, #00f2fe); }
-        .stat-icon.tasks { background: linear-gradient(45deg, #43e97b, #38f9d7); }
-
-        .stat-value {
-            font-size: 2.5rem;
-            font-weight: 800;
-            color: #2d3748;
-            line-height: 1;
+        .json-container {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(0, 255, 65, 0.2);
+            border-radius: 15px;
+            padding: 1.5rem;
+            max-height: 500px;
+            overflow-y: auto;
         }
 
-        .stat-label {
-            color: #718096;
-            font-size: 0.9rem;
-            margin-top: 0.5rem;
+        .json-content {
+            color: var(--matrix-green);
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+
+        /* Status Messages */
+        .status-message {
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
             font-weight: 500;
         }
 
-        .stat-change {
-            font-size: 0.8rem;
-            padding: 0.25rem 0.5rem;
-            border-radius: 20px;
-            font-weight: 600;
+        .status-success {
+            background: rgba(0, 255, 65, 0.1);
+            border: 1px solid rgba(0, 255, 65, 0.3);
+            color: var(--matrix-green);
         }
 
-        .stat-change.positive {
-            background: rgba(72, 187, 120, 0.1);
-            color: #48bb78;
+        .status-error {
+            background: rgba(255, 0, 110, 0.1);
+            border: 1px solid rgba(255, 0, 110, 0.3);
+            color: var(--cyber-pink);
         }
 
-        .stat-change.negative {
-            background: rgba(245, 101, 101, 0.1);
-            color: #f56565;
+        .status-warning {
+            background: rgba(255, 255, 0, 0.1);
+            border: 1px solid rgba(255, 255, 0, 0.3);
+            color: var(--neon-yellow);
         }
 
-        /* Action Cards */
-        .action-card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
+        .status-info {
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            color: var(--electric-blue);
+        }
+
+        /* API Endpoints Info */
+        .endpoints-section {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 2rem 4rem;
+        }
+
+        .endpoints-title {
+            text-align: center;
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--matrix-green);
+            margin-bottom: 3rem;
+            text-shadow: 0 0 20px var(--matrix-green);
+        }
+
+        .endpoints-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 2rem;
+        }
+
+        .endpoint-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(30px);
+            border: 1px solid var(--glass-border);
             border-radius: 20px;
             padding: 2rem;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            flex-direction: column;
+            transition: all 0.4s ease;
+            position: relative;
+            overflow: hidden;
         }
 
-        .action-card:hover {
+        .endpoint-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--neon-gradient);
+            transform: scaleX(0);
+            transition: transform 0.3s ease;
+        }
+
+        .endpoint-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .endpoint-card:hover {
             transform: translateY(-5px);
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15);
+            background: rgba(0, 255, 65, 0.03);
+            border-color: rgba(0, 255, 65, 0.2);
+            box-shadow: 0 15px 40px rgba(0, 255, 65, 0.15);
         }
 
-        .action-header {
+        .endpoint-header {
             display: flex;
             align-items: center;
             gap: 1rem;
             margin-bottom: 1.5rem;
         }
 
-        .action-icon {
+        .endpoint-icon {
             width: 45px;
             height: 45px;
+            background: var(--neon-gradient);
             border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
-            color: white;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: #000;
+            font-size: 1.1rem;
+            font-weight: bold;
         }
 
-        .action-title {
-            font-size: 1.2rem;
+        .endpoint-title {
+            font-size: 1.3rem;
             font-weight: 700;
-            color: #2d3748;
+            color: #fff;
         }
 
-        .action-buttons {
-            display: grid;
-            gap: 1rem;
-        }
-
-        .btn {
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 0.75rem 1.5rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.5rem;
-            text-decoration: none;
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn.secondary {
-            background: rgba(102, 126, 234, 0.1);
-            color: #667eea;
-            border: 1px solid rgba(102, 126, 234, 0.3);
-        }
-
-        .btn.secondary:hover {
-            background: rgba(102, 126, 234, 0.2);
-            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.2);
-        }
-
-        /* Recent Activity */
-        .recent-activity {
-            grid-column: 1 / -1;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
-            border-radius: 20px;
-            padding: 2rem;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        }
-
-        .activity-header {
-            display: flex;
-            justify-content: between;
-            align-items: center;
+        .endpoint-description {
+            color: rgba(255, 255, 255, 0.7);
+            line-height: 1.6;
             margin-bottom: 1.5rem;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-            padding-bottom: 1rem;
         }
 
-        .activity-item {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            padding: 1rem 0;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        .endpoint-list {
+            list-style: none;
+            margin-bottom: 1.5rem;
         }
 
-        .activity-icon {
+        .endpoint-item {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(0, 255, 65, 0.2);
+            border-radius: 8px;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            transition: all 0.3s ease;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .endpoint-item:hover {
+            background: rgba(0, 255, 65, 0.05);
+            border-color: rgba(0, 255, 65, 0.4);
+        }
+
+        .method-badge {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 15px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            margin-right: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .method-get { background: rgba(0, 255, 65, 0.8); color: #000; }
+        .method-post { background: rgba(0, 212, 255, 0.8); color: #000; }
+        .method-put { background: rgba(255, 255, 0, 0.8); color: #000; }
+        .method-delete { background: rgba(255, 0, 110, 0.8); color: #fff; }
+
+        .endpoint-url {
+            color: var(--matrix-green);
+            font-weight: 600;
+        }
+
+        /* Loader Animation */
+        .cyber-loader {
             width: 40px;
             height: 40px;
+            border: 3px solid rgba(0, 255, 65, 0.2);
+            border-top: 3px solid var(--matrix-green);
             border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 3rem 2rem;
+            color: rgba(255, 255, 255, 0.5);
+            border-top: 1px solid rgba(0, 255, 65, 0.2);
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .footer-links {
             display: flex;
-            align-items: center;
             justify-content: center;
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            color: white;
-            font-size: 0.9rem;
+            gap: 2rem;
+            margin-top: 1rem;
         }
 
-        .activity-content {
-            flex: 1;
+        .footer-links a {
+            color: var(--matrix-green);
+            text-decoration: none;
+            transition: all 0.3s ease;
         }
 
-        .activity-title {
-            font-weight: 600;
-            color: #2d3748;
-            margin-bottom: 0.25rem;
-        }
-
-        .activity-subtitle {
-            color: #718096;
-            font-size: 0.9rem;
-        }
-
-        .activity-time {
-            color: #a0aec0;
-            font-size: 0.8rem;
+        .footer-links a:hover {
+            color: var(--electric-blue);
+            text-shadow: 0 0 10px var(--electric-blue);
         }
 
         /* Responsive */
         @media (max-width: 768px) {
-            .main-content {
-                grid-template-columns: 1fr;
-                padding: 1rem;
+            .hero-title {
+                font-size: 2.5rem;
+            }
+
+            .api-stats {
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
                 gap: 1rem;
             }
 
-            .stats-grid {
+            .endpoints-grid {
                 grid-template-columns: 1fr;
             }
 
-            .header {
-                padding: 1rem;
+            .tester-card {
+                padding: 2rem 1.5rem;
             }
 
-            .user-info {
-                gap: 0.5rem;
+            .action-grid {
+                grid-template-columns: 1fr;
             }
-        }
 
-        /* Animations */
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
+            .nav-container {
+                padding: 0 1rem;
             }
         }
 
-        .stat-card, .action-card {
-            animation: fadeInUp 0.6s ease-out;
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
         }
 
-        .stat-card:nth-child(1) { animation-delay: 0.1s; }
-        .stat-card:nth-child(2) { animation-delay: 0.2s; }
-        .stat-card:nth-child(3) { animation-delay: 0.3s; }
-        .stat-card:nth-child(4) { animation-delay: 0.4s; }
-
-        .floating-particles {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: -1;
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.3);
         }
 
-        .particle {
-            position: absolute;
-            width: 4px;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.6);
-            border-radius: 50%;
-            animation: float 6s ease-in-out infinite;
+        ::-webkit-scrollbar-thumb {
+            background: var(--matrix-green);
+            border-radius: 4px;
         }
 
-        @keyframes float {
-            0%, 100% { transform: translateY(0px) rotate(0deg); }
-            50% { transform: translateY(-20px) rotate(180deg); }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--electric-blue);
+        }
+
+        /* Terminal effect for JSON */
+        .terminal-effect {
+            position: relative;
+        }
+
+        .terminal-effect::before {
+            content: '> ';
+            color: var(--matrix-green);
+            font-weight: bold;
+        }
+
+        /* Glitch effect */
+        .glitch {
+            position: relative;
+            animation: glitch 2s infinite;
+        }
+
+        @keyframes glitch {
+            0%, 100% { transform: translate(0); }
+            20% { transform: translate(-1px, 1px); }
+            40% { transform: translate(-1px, -1px); }
+            60% { transform: translate(1px, 1px); }
+            80% { transform: translate(1px, -1px); }
+        }
+
+        /* Easter egg konami code ready */
+        .konami-activated {
+            animation: rainbow-bg 3s linear infinite;
+        }
+
+        @keyframes rainbow-bg {
+            0% { filter: hue-rotate(0deg); }
+            100% { filter: hue-rotate(360deg); }
         }
     </style>
 </head>
 <body>
-    <div class="floating-particles">
-        <div class="particle" style="left: 10%; animation-delay: 0s;"></div>
-        <div class="particle" style="left: 20%; animation-delay: 1s;"></div>
-        <div class="particle" style="left: 30%; animation-delay: 2s;"></div>
-        <div class="particle" style="left: 40%; animation-delay: 3s;"></div>
-        <div class="particle" style="left: 50%; animation-delay: 4s;"></div>
-        <div class="particle" style="left: 60%; animation-delay: 5s;"></div>
-        <div class="particle" style="left: 70%; animation-delay: 6s;"></div>
-        <div class="particle" style="left: 80%; animation-delay: 1.5s;"></div>
-        <div class="particle" style="left: 90%; animation-delay: 2.5s;"></div>
-    </div>
+    <!-- Matrix Canvas Background -->
+    <canvas id="matrix-canvas"></canvas>
 
-    <div class="container">
-        <header class="header">
+    <!-- Cyber Grid -->
+    <div class="cyber-grid"></div>
+
+    <!-- Floating Particles -->
+    <div class="particles-container" id="particles"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="nav-container">
             <div class="logo">
-                <i class="fas fa-chart-line"></i>
-                <span>Nash CRM & ERP</span>
+                <div class="logo-icon">
+                    <i class="fas fa-terminal"></i>
+                </div>
+                <span class="glitch">Nash CRM API</span>
             </div>
-            <div class="user-info">
-                <div class="user-avatar">
-                    А
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                <span>SYSTEM ONLINE</span>
+                <i class="fas fa-microchip"></i>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1 class="hero-title">NEURAL API INTERFACE</h1>
+        <p class="hero-subtitle">
+            Підключіться до майбутнього CRM технологій. Інтелектуальна документація з real-time тестуванням,
+            AI-аналітикою та квантовою швидкістю обробки даних.
+        </p>
+    </section>
+
+    <!-- API Stats -->
+    <section class="api-stats">
+        <div class="stat-card">
+            <div class="stat-number" data-target="47">0</div>
+            <div class="stat-label">AI Endpoints</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" data-target="8">0</div>
+            <div class="stat-label">Neural Modules</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" data-target="99.9">0</div>
+            <div class="stat-label">Uptime %</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" data-target="12">0</div>
+            <div class="stat-label">ms Response</div>
+        </div>
+    </section>
+
+    <!-- API Tester -->
+    <section class="api-tester">
+        <div class="tester-card">
+            <div class="tester-header">
+                <div class="tester-icon">
+                    <i class="fas fa-rocket"></i>
                 </div>
                 <div>
-                    <div style="font-weight: 600; color: #2d3748;">Адмін</div>
-                    <div style="font-size: 0.8rem; color: #718096;">Головний бухгалтер</div>
-                </div>
-                <i class="fas fa-chevron-down" style="color: #667eea; cursor: pointer;"></i>
-            </div>
-        </header>
-
-        <main class="main-content">
-            <!-- Quick Stats -->
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <div class="stat-icon leads">
-                            <i class="fas fa-user-plus"></i>
-                        </div>
-                        <div class="stat-change positive">
-                            <i class="fas fa-arrow-up"></i> +12%
-                        </div>
+                    <div class="tester-title">QUANTUM API TESTER</div>
+                    <div style="color: rgba(255, 255, 255, 0.7); margin-top: 0.5rem;">
+                        Підключіться до нейронної мережі та тестуйте API в реальному часі
                     </div>
-                    <div class="stat-value">247</div>
-                    <div class="stat-label">Нові ліди сьогодні</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <div class="stat-icon clients">
-                            <i class="fas fa-users"></i>
-                        </div>
-                        <div class="stat-change positive">
-                            <i class="fas fa-arrow-up"></i> +8%
-                        </div>
-                    </div>
-                    <div class="stat-value">1,847</div>
-                    <div class="stat-label">Активні клієнти</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <div class="stat-icon revenue">
-                            <i class="fas fa-chart-bar"></i>
-                        </div>
-                        <div class="stat-change positive">
-                            <i class="fas fa-arrow-up"></i> +24%
-                        </div>
-                    </div>
-                    <div class="stat-value">₴847K</div>
-                    <div class="stat-label">Дохід за місяць</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <div class="stat-icon tasks">
-                            <i class="fas fa-tasks"></i>
-                        </div>
-                        <div class="stat-change negative">
-                            <i class="fas fa-arrow-down"></i> 3
-                        </div>
-                    </div>
-                    <div class="stat-value">28</div>
-                    <div class="stat-label">Активні задачі</div>
                 </div>
             </div>
 
-            <!-- Quick Actions -->
-            <div class="action-card">
-                <div class="action-header">
-                    <div class="action-icon">
-                        <i class="fas fa-plus"></i>
-                    </div>
-                    <div class="action-title">Швидкі дії</div>
+            <!-- Token Section -->
+            <div class="token-section">
+                <div id="token-status"></div>
+                <div class="token-input-group">
+                    <input
+                        type="password"
+                        id="jwt-token"
+                        class="token-input"
+                        placeholder="Введіть JWT токен для доступу до нейронної мережі..."
+                        autocomplete="off"
+                    >
+                    <button onclick="authenticateUser()" class="cyber-button">
+                        <i class="fas fa-shield-alt"></i>
+                        АВТОРИЗАЦІЯ
+                    </button>
+                    <button onclick="openNeuralLogin()" class="cyber-button" style="background: linear-gradient(45deg, #ff006e, #8338ec);">
+                        <i class="fas fa-brain"></i>
+                        НЕЙРО-ВХІД
+                    </button>
                 </div>
-                <div class="action-buttons">
-                    <a href="/admin/leads/add/" class="btn">
+            </div>
+
+            <!-- Neural Command Center -->
+            <div class="action-grid">
+                <button class="action-btn" onclick="quantumPing()">
+                    <i class="fas fa-satellite-dish"></i>
+                    Quantum Ping
+                </button>
+                <button class="action-btn" onclick="neuralFunnel()">
+                    <i class="fas fa-chart-line"></i>
+                    Neural Funnel
+                </button>
+                <button class="action-btn" onclick="matrixLeads()">
+                    <i class="fas fa-users-cog"></i>
+                    Matrix Leads
+                </button>
+                <button class="action-btn" onclick="cyberDashboard()">
+                    <i class="fas fa-tachometer-alt"></i>
+                    Cyber Dashboard
+                </button>
+                <button class="action-btn" onclick="aiAnalytics()">
+                    <i class="fas fa-robot"></i>
+                    AI Analytics
+                </button>
+                <button class="action-btn" onclick="quantumClients()">
+                    <i class="fas fa-user-astronaut"></i>
+                    Quantum Clients
+                </button>
+                <button class="action-btn" onclick="holographicReports()">
+                    <i class="fas fa-chart-pie"></i>
+                    Holographic Reports
+                </button>
+                <button class="action-btn" onclick="neuralPayments()">
+                    <i class="fas fa-coins"></i>
+                    Neural Payments
+                </button>
+                <button class="action-btn" onclick="dataStreamViz()">
+                    <i class="fas fa-stream"></i>
+                    Data Stream Viz
+                </button>
+                <button class="action-btn" onclick="cybersecAnalysis()">
+                    <i class="fas fa-shield-virus"></i>
+                    Security Matrix
+                </button>
+                <button class="action-btn" onclick="customPortal()">
+                    <i class="fas fa-portal-exit"></i>
+                    Custom Portal
+                </button>
+                <button class="action-btn" onclick="konami()">
+                    <i class="fas fa-magic"></i>
+                    Easter Egg
+                </button>
+            </div>
+
+            <!-- Results Container -->
+            <div class="results-container" id="results-container">
+                <div class="results-header">
+                    <div class="results-title">
+                        <i class="fas fa-chart-area"></i>
+                        NEURAL RESPONSE MATRIX
+                    </div>
+                    <div class="view-toggle">
+                        <button class="toggle-btn active" id="chart-btn" onclick="switchView('chart')">
+                            <i class="fas fa-chart-pie"></i> HOLOGRAM
+                        </button>
+                        <button class="toggle-btn" id="json-btn" onclick="switchView('json')">
+                            <i class="fas fa-code"></i> MATRIX CODE
+                        </button>
+                        <button class="toggle-btn" id="3d-btn" onclick="switchView('3d')">
+                            <i class="fas fa-cube"></i> 3D SPACE
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Chart Container -->
+                <div class="chart-container" id="chart-container">
+                    <canvas id="neural-chart" width="800" height="400"></canvas>
+                </div>
+
+                <!-- 3D Visualization Container -->
+                <div class="chart-container" id="3d-container" style="display: none;">
+                    <div id="threejs-container" style="width: 100%; height: 400px;"></div>
+                </div>
+
+                <!-- JSON Container -->
+                <div class="json-container" id="json-container" style="display: none;">
+                    <div class="json-content terminal-effect" id="json-content"></div>
+                </div>
+
+                <!-- AI Insights Panel -->
+                <div id="ai-insights" style="
+                    background: rgba(0, 255, 65, 0.05);
+                    border: 1px solid rgba(0, 255, 65, 0.2);
+                    border-radius: 15px;
+                    padding: 1.5rem;
+                    margin-top: 1rem;
+                    display: none;
+                ">
+                    <h4 style="color: var(--matrix-green); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <i class="fas fa-brain"></i>
+                        AI ІНСАЙТИ
+                    </h4>
+                    <div id="ai-content"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Endpoint Documentation -->
+    <section class="endpoints-section">
+        <h2 class="endpoints-title">NEURAL ENDPOINTS</h2>
+        <div class="endpoints-grid">
+            <!-- Leads Module -->
+            <div class="endpoint-card">
+                <div class="endpoint-header">
+                    <div class="endpoint-icon">
                         <i class="fas fa-user-plus"></i>
-                        Створити лід
-                    </a>
-                    <a href="/admin/clients/add/" class="btn secondary">
-                        <i class="fas fa-users"></i>
-                        Додати клієнта
-                    </a>
-                    <a href="/admin/reports/" class="btn secondary">
-                        <i class="fas fa-chart-pie"></i>
-                        Переглянути звіти
-                    </a>
+                    </div>
+                    <div class="endpoint-title">LEADS MATRIX</div>
                 </div>
+                <div class="endpoint-description">
+                    Квантові операції з лідами: створення, мутація, телепортація статусів та нейро-аналітика
+                </div>
+                <ul class="endpoint-list">
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/leads/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-url">/api/leads/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-put">PUT</span>
+                        <span class="endpoint-url">/api/leads/update-status/{id}/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-url">/api/leads/add-payment/{id}/</span>
+                    </li>
+                </ul>
             </div>
 
-            <!-- Analytics -->
-            <div class="action-card">
-                <div class="action-header">
-                    <div class="action-icon">
+            <!-- Clients Module -->
+            <div class="endpoint-card">
+                <div class="endpoint-header">
+                    <div class="endpoint-icon">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <div class="endpoint-title">CLIENT NEURAL NET</div>
+                </div>
+                <div class="endpoint-description">
+                    AI-кластеризація клієнтів: RFM-аналіз, температурна сегментація, чурн-предікція
+                </div>
+                <ul class="endpoint-list">
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/clients/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/clients/hot-leads/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/clients/churn-risk/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/clients/rfm-analysis/</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Analytics Module -->
+            <div class="endpoint-card">
+                <div class="endpoint-header">
+                    <div class="endpoint-icon">
                         <i class="fas fa-chart-line"></i>
                     </div>
-                    <div class="action-title">Аналітика</div>
+                    <div class="endpoint-title">QUANTUM ANALYTICS</div>
                 </div>
-                <div class="action-buttons">
-                    <a href="/api/funnel/" class="btn">
-                        <i class="fas fa-funnel-dollar"></i>
-                        Воронка продажів
-                    </a>
-                    <a href="/api/leads-report/" class="btn secondary">
-                        <i class="fas fa-file-alt"></i>
-                        Звіт по лідах
-                    </a>
-                    <a href="/admin/map-search/" class="btn secondary">
-                        <i class="fas fa-map"></i>
-                        Карта клієнтів
-                    </a>
+                <div class="endpoint-description">
+                    Багатовимірна аналітика: голографічні звіти, часові парадокси, паралельні воронки
                 </div>
+                <ul class="endpoint-list">
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/analytics/funnel/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/analytics/leads-report/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/crm/dashboard/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/crm/segments/</span>
+                    </li>
+                </ul>
             </div>
 
-            <!-- Management -->
-            <div class="action-card">
-                <div class="action-header">
-                    <div class="action-icon">
-                        <i class="fas fa-cog"></i>
+            <!-- Payments Module -->
+            <div class="endpoint-card">
+                <div class="endpoint-header">
+                    <div class="endpoint-icon">
+                        <i class="fas fa-coins"></i>
                     </div>
-                    <div class="action-title">Управління</div>
+                    <div class="endpoint-title">FINANCIAL CYBERNET</div>
                 </div>
-                <div class="action-buttons">
-                    <a href="/admin/managers/" class="btn">
-                        <i class="fas fa-user-tie"></i>
-                        Менеджери
-                    </a>
-                    <a href="/api/payments/" class="btn secondary">
-                        <i class="fas fa-money-bill-wave"></i>
-                        Платежі
-                    </a>
-                    <a href="/admin/" class="btn secondary">
-                        <i class="fas fa-tools"></i>
-                        Налаштування
-                    </a>
+                <div class="endpoint-description">
+                    Криптографічні фінанси: блокчейн-платежі, квантове шифрування, AI-аудит
                 </div>
+                <ul class="endpoint-list">
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/analytics/payments/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/clients/payments/{id}/</span>
+                    </li>
+                    <li class="endpoint-item">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-url">/api/leads/payments/{id}/</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>Nash CRM Neural API v2.077 • Створено в кіберпанк реальності</p>
+        <div class="footer-links">
+            <a href="/admin/"><i class="fas fa-cog"></i> Admin Portal</a>
+            <a href="/api/ping/"><i class="fas fa-satellite"></i> System Status</a>
+            <a href="mailto:dev@nashcrm.ai"><i class="fas fa-envelope"></i> Neural Support</a>
+        </div>
+        <p style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.5;">
+            "У кіберпросторі ніхто не почує твоїх API викликів" - Gibson, 2077
+        </p>
+    </footer>
+
+    <!-- Neural Login Modal -->
+    <div id="neural-modal" style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        backdrop-filter: blur(10px);
+        z-index: 2000;
+        align-items: center;
+        justify-content: center;
+    ">
+        <div style="
+            background: var(--dark-glass);
+            backdrop-filter: blur(30px);
+            border: 2px solid var(--matrix-green);
+            border-radius: 20px;
+            padding: 3rem;
+            width: 90%;
+            max-width: 500px;
+            position: relative;
+            animation: modal-appear 0.5s ease;
+        ">
+            <button onclick="closeNeuralModal()" style="
+                position: absolute;
+                top: 1rem;
+                right: 1rem;
+                background: none;
+                border: none;
+                color: var(--matrix-green);
+                font-size: 1.5rem;
+                cursor: pointer;
+            ">×</button>
+
+            <h3 style="
+                color: var(--matrix-green);
+                text-align: center;
+                margin-bottom: 2rem;
+                font-size: 1.8rem;
+                text-shadow: 0 0 15px var(--matrix-green);
+            ">
+                <i class="fas fa-brain"></i>
+                NEURAL ACCESS
+            </h3>
+
+            <div style="margin-bottom: 1.5rem;">
+                <label style="display: block; margin-bottom: 0.5rem; color: rgba(255, 255, 255, 0.8);">
+                    Neural ID:
+                </label>
+                <input
+                    type="text"
+                    id="neural-username"
+                    style="
+                        width: 100%;
+                        background: rgba(0, 0, 0, 0.5);
+                        border: 2px solid rgba(0, 255, 65, 0.3);
+                        border-radius: 8px;
+                        padding: 1rem;
+                        color: var(--matrix-green);
+                        font-family: 'Courier New', monospace;
+                    "
+                    placeholder="Введіть ваш neural_id..."
+                >
             </div>
 
-            <!-- Recent Activity -->
-            <div class="recent-activity">
-                <div class="activity-header">
-                    <h3 style="display: flex; align-items: center; gap: 0.5rem; color: #2d3748;">
-                        <i class="fas fa-clock"></i>
-                        Остання активність
-                    </h3>
-                </div>
-
-                <div class="activity-item">
-                    <div class="activity-icon">
-                        <i class="fas fa-user-plus"></i>
-                    </div>
-                    <div class="activity-content">
-                        <div class="activity-title">Новий лід від Олексій Іваненко</div>
-                        <div class="activity-subtitle">Телефон: +380671234567, Джерело: Сайт</div>
-                    </div>
-                    <div class="activity-time">2 хвилини тому</div>
-                </div>
-
-                <div class="activity-item">
-                    <div class="activity-icon">
-                        <i class="fas fa-money-bill"></i>
-                    </div>
-                    <div class="activity-content">
-                        <div class="activity-title">Отримано платіж ₴15,000</div>
-                        <div class="activity-subtitle">Від клієнта Марія Петренко, лід #1847</div>
-                    </div>
-                    <div class="activity-time">15 хвилин тому</div>
-                </div>
-
-                <div class="activity-item">
-                    <div class="activity-icon">
-                        <i class="fas fa-check-circle"></i>
-                    </div>
-                    <div class="activity-content">
-                        <div class="activity-title">Лід #1842 завершено</div>
-                        <div class="activity-subtitle">Менеджер: Іван Сидоренко, Сума: ₴8,500</div>
-                    </div>
-                    <div class="activity-time">1 година тому</div>
-                </div>
-
-                <div class="activity-item">
-                    <div class="activity-icon">
-                        <i class="fas fa-exclamation-triangle"></i>
-                    </div>
-                    <div class="activity-content">
-                        <div class="activity-title">Прострочена задача</div>
-                        <div class="activity-subtitle">Зв'язатися з клієнтом Андрій Коваленко</div>
-                    </div>
-                    <div class="activity-time">3 години тому</div>
-                </div>
+            <div style="margin-bottom: 2rem;">
+                <label style="display: block; margin-bottom: 0.5rem; color: rgba(255, 255, 255, 0.8);">
+                    Quantum Key:
+                </label>
+                <input
+                    type="password"
+                    id="neural-password"
+                    style="
+                        width: 100%;
+                        background: rgba(0, 0, 0, 0.5);
+                        border: 2px solid rgba(0, 255, 65, 0.3);
+                        border-radius: 8px;
+                        padding: 1rem;
+                        color: var(--matrix-green);
+                        font-family: 'Courier New', monospace;
+                    "
+                    placeholder="••••••••••••••••"
+                >
             </div>
-        </main>
+
+            <button onclick="performNeuralLogin()" id="neural-login-btn" class="cyber-button" style="width: 100%; margin-bottom: 1rem;">
+                <i class="fas fa-rocket"></i>
+                INITIALIZE NEURAL LINK
+            </button>
+
+            <div id="neural-status" style="text-align: center;"></div>
+
+            <div style="text-align: center; margin-top: 1rem; font-size: 0.9rem; color: rgba(255, 255, 255, 0.6);">
+                Використовуйте ваші Django Admin облікові дані
+            </div>
+        </div>
     </div>
 
     <script>
-        // Простий скрипт для анімації
+
+        // Global variables
+        let currentToken = '';
+        let currentChart = null;
+        let currentView = 'chart';
+        let neuralData = null;
+        let scene, camera, renderer, cube;
+        let particles = [];
+        let konamiCode = [];
+        const konamiSequence = [38, 38, 40, 40, 37, 39, 37, 39, 66, 65]; // ↑↑↓↓←→←→BA
+
+        // Initialize on load
         document.addEventListener('DOMContentLoaded', function() {
-            // Додаємо інтерактивність до карток
-            const cards = document.querySelectorAll('.stat-card, .action-card');
-
-            cards.forEach(card => {
-                card.addEventListener('mouseenter', function() {
-                    this.style.transform = 'translateY(-8px) scale(1.02)';
-                });
-
-                card.addEventListener('mouseleave', function() {
-                    this.style.transform = 'translateY(0) scale(1)';
-                });
-            });
-
-            // Симуляція оновлення статистики
-            setInterval(function() {
-                const statsValues = document.querySelectorAll('.stat-value');
-                statsValues.forEach(stat => {
-                    stat.style.animation = 'pulse 0.5s ease-in-out';
-                    setTimeout(() => {
-                        stat.style.animation = '';
-                    }, 500);
-                });
-            }, 30000);
+            // Add delay to ensure all elements are rendered
+            setTimeout(() => {
+                initializeMatrix();
+                initializeParticles();
+                initializeStats();
+                init3DSpace();
+                loadSavedToken();
+                setupEventListeners();
+            }, 100);
         });
 
-        // CSS для анімації pulse
+        // Matrix background effect
+        function initializeMatrix() {
+            const canvas = document.getElementById('matrix-canvas');
+            const ctx = canvas.getContext('2d');
+
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            const characters = 'NASH CRM API 2077 QUANTUM NEURAL CYBER MATRIX BLOCKCHAIN AI ML DL NN RNN LSTM GAN VAE BERT GPT'.split(' ');
+            const drops = [];
+
+            for (let x = 0; x < canvas.width / 10; x++) {
+                drops[x] = Math.random() * canvas.height;
+            }
+
+            function drawMatrix() {
+                ctx.fillStyle = 'rgba(10, 10, 10, 0.04)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = '#00ff41';
+                ctx.font = '10px Courier New';
+
+                for (let i = 0; i < drops.length; i++) {
+                    const text = characters[Math.floor(Math.random() * characters.length)];
+                    ctx.fillText(text, i * 10, drops[i] * 10);
+
+                    if (drops[i] * 10 > canvas.height && Math.random() > 0.975) {
+                        drops[i] = 0;
+                    }
+                    drops[i]++;
+                }
+            }
+
+            setInterval(drawMatrix, 33);
+        }
+
+        // Floating particles
+        function initializeParticles() {
+            const container = document.getElementById('particles');
+
+            function createParticle() {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.left = Math.random() * 100 + '%';
+                particle.style.animationDuration = (Math.random() * 10 + 10) + 's';
+                particle.style.animationDelay = Math.random() * 5 + 's';
+                container.appendChild(particle);
+
+                setTimeout(() => {
+                    if (particle.parentNode) {
+                        particle.parentNode.removeChild(particle);
+                    }
+                }, 15000);
+            }
+
+            // Create initial particles
+            for (let i = 0; i < 20; i++) {
+                setTimeout(createParticle, i * 500);
+            }
+
+            // Continue creating particles
+            setInterval(createParticle, 800);
+        }
+
+        // Animate stats
+        function initializeStats() {
+            const stats = document.querySelectorAll('.stat-number');
+
+            stats.forEach(stat => {
+                const target = parseFloat(stat.getAttribute('data-target'));
+                let current = 0;
+                const increment = target / 100;
+
+                const updateCounter = () => {
+                    if (current < target) {
+                        current += increment;
+                        stat.textContent = Math.ceil(current);
+                        setTimeout(updateCounter, 20);
+                    } else {
+                        stat.textContent = target;
+                    }
+                };
+
+                setTimeout(updateCounter, Math.random() * 2000);
+            });
+        }
+
+        // 3D Space initialization
+        function init3DSpace() {
+            const container = document.getElementById('threejs-container');
+            if (!container || typeof THREE === 'undefined') {
+                console.log('3D container or THREE.js not ready yet');
+                return;
+            }
+
+            try {
+                scene = new THREE.Scene();
+                camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+                renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+                renderer.setSize(container.clientWidth, container.clientHeight);
+                renderer.setClearColor(0x000000, 0);
+
+                // Create a glowing cube
+                const geometry = new THREE.BoxGeometry(2, 2, 2);
+                const material = new THREE.MeshBasicMaterial({
+                    color: 0x00ff41,
+                    wireframe: true
+                });
+                cube = new THREE.Mesh(geometry, material);
+                scene.add(cube);
+
+                camera.position.z = 5;
+
+                function animate() {
+                    requestAnimationFrame(animate);
+                    if (cube) {
+                        cube.rotation.x += 0.01;
+                        cube.rotation.y += 0.01;
+                    }
+                    if (renderer && scene && camera) {
+                        renderer.render(scene, camera);
+                    }
+                }
+
+                container.appendChild(renderer.domElement);
+                animate();
+            } catch (error) {
+                console.log('3D initialization failed:', error);
+                // Fallback message
+                if (container) {
+                    container.innerHTML = '<div style="color: #00ff41; text-align: center; padding: 2rem;">🌐 3D Neural Space Loading...</div>';
+                }
+            }
+        }
+
+        // Event listeners
+        function setupEventListeners() {
+            // Konami code
+            document.addEventListener('keydown', function(e) {
+                konamiCode.push(e.keyCode);
+                if (konamiCode.length > konamiSequence.length) {
+                    konamiCode.shift();
+                }
+
+                if (JSON.stringify(konamiCode) === JSON.stringify(konamiSequence)) {
+                    activateKonami();
+                }
+            });
+
+            // Resize handler for 3D
+            window.addEventListener('resize', function() {
+                if (camera && renderer) {
+                    const container = document.getElementById('threejs-container');
+                    if (container) {
+                        camera.aspect = container.clientWidth / container.clientHeight;
+                        camera.updateProjectionMatrix();
+                        renderer.setSize(container.clientWidth, container.clientHeight);
+                    }
+                }
+            });
+        }
+
+        // Authentication functions
+        function authenticateUser() {
+            const token = document.getElementById('jwt-token').value.trim();
+
+            if (!token) {
+                showStatus('error', 'Neural токен не може бути пустим!');
+                return;
+            }
+
+            currentToken = token;
+            localStorage.setItem('nash_neural_token', token);
+
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                const exp = new Date(payload.exp * 1000);
+                const now = new Date();
+
+                if (exp < now) {
+                    showStatus('error', 'Токен прострочений! Час для квантового оновлення...');
+                } else {
+                    showStatus('success', `Neural Link активний! Користувач: ${payload.username || 'ANONYMOUS_NEURAL_ENTITY'}`);
+                }
+            } catch (e) {
+                showStatus('warning', 'Квантовий токен не розпізнано, але спробуємо підключитися...');
+            }
+        }
+
+        function openNeuralLogin() {
+            document.getElementById('neural-modal').style.display = 'flex';
+        }
+
+        function closeNeuralModal() {
+            document.getElementById('neural-modal').style.display = 'none';
+            document.getElementById('neural-status').innerHTML = '';
+        }
+
+        async function performNeuralLogin() {
+            const username = document.getElementById('neural-username').value;
+            const password = document.getElementById('neural-password').value;
+            const btn = document.getElementById('neural-login-btn');
+            const status = document.getElementById('neural-status');
+
+            if (!username || !password) {
+                status.innerHTML = '<div style="color: var(--cyber-pink);">Всі поля нейронної мережі обов\'язкові!</div>';
+                return;
+            }
+
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> СИНХРОНІЗАЦІЯ З МАТРИЦЕЮ...';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/api/auth/login/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.data && data.data.tokens) {
+                    const token = data.data.tokens.access;
+                    document.getElementById('jwt-token').value = token;
+                    authenticateUser();
+
+                    status.innerHTML = `
+                        <div style="color: var(--matrix-green);">
+                            <i class="fas fa-check-circle"></i>
+                            NEURAL LINK ВСТАНОВЛЕНО!
+                        </div>
+                    `;
+
+                    setTimeout(closeNeuralModal, 2000);
+                } else {
+                    status.innerHTML = `<div style="color: var(--cyber-pink);">ПОМИЛКА ДОСТУПУ: ${data.meta?.errors?.authentication_error || 'Невірні нейро-дані'}</div>`;
+                }
+            } catch (error) {
+                status.innerHTML = `<div style="color: var(--cyber-pink);">МЕРЕЖЕВА АНОМАЛІЯ: ${error.message}</div>`;
+            }
+
+            btn.innerHTML = '<i class="fas fa-rocket"></i> INITIALIZE NEURAL LINK';
+            btn.disabled = false;
+        }
+
+        function loadSavedToken() {
+            const saved = localStorage.getItem('nash_neural_token');
+            const tokenInput = document.getElementById('jwt-token');
+
+            if (saved && tokenInput) {
+                tokenInput.value = saved;
+                authenticateUser();
+            }
+        }
+
+        // API Testing functions
+        async function quantumPing() {
+            await executeQuantumCall('/api/ping/', 'Перевірка квантового зв\'язку...');
+        }
+
+        async function neuralFunnel() {
+            await executeQuantumCall('/api/analytics/funnel/', 'Сканування нейронної воронки...');
+        }
+
+        async function matrixLeads() {
+            await executeQuantumCall('/api/leads/', 'Завантаження матриці лідів...');
+        }
+
+        async function cyberDashboard() {
+            await executeQuantumCall('/api/crm/dashboard/', 'Активація кібер-дашборду...');
+        }
+
+        async function aiAnalytics() {
+            await executeQuantumCall('/api/analytics/leads-report/', 'AI аналіз в процесі...');
+        }
+
+        async function quantumClients() {
+            await executeQuantumCall('/api/clients/', 'Квантове сканування клієнтів...');
+        }
+
+        async function holographicReports() {
+            await executeQuantumCall('/api/analytics/detailed-report/', 'Створення голограми звітів...');
+        }
+
+        async function neuralPayments() {
+            await executeQuantumCall('/api/analytics/payments/', 'Нейронний аналіз платежів...');
+        }
+
+        async function dataStreamViz() {
+            await executeQuantumCall('/api/clients/temperature-stats/', 'Візуалізація потоків даних...');
+        }
+
+        async function cybersecAnalysis() {
+            await executeQuantumCall('/api/statuses/', 'Аналіз безпеки матриці...');
+        }
+
+        function customPortal() {
+            const endpoints = [
+                '/api/ping/', '/api/leads/', '/api/clients/', '/api/analytics/funnel/',
+                '/api/crm/dashboard/', '/api/analytics/leads-report/', '/api/analytics/payments/',
+                '/api/clients/hot-leads/', '/api/clients/churn-risk/', '/api/clients/rfm-analysis/',
+                '/api/clients/temperature-stats/', '/api/clients/akb-segments/', '/api/statuses/',
+                '/api/crm/segments/', '/api/managers/', '/api/external/leads/'
+            ];
+
+            const url = prompt(
+                '🚀 ПОРТАЛ У КІБЕРПРОСТІР\n\n' +
+                '🔮 Доступні квантові тунелі:\n' +
+                endpoints.slice(0, 8).join('\n') +
+                '\n... та ще ' + (endpoints.length - 8) + ' нейро-маршрутів\n\n' +
+                '⚡ Введіть координати порталу:',
+                '/api/clients/hot-leads/'
+            );
+
+            if (url) {
+                executeQuantumCall(url, `Портал відкрито: ${url}`);
+            }
+        }
+
+        // Main API execution function
+        async function executeQuantumCall(endpoint, loadingMessage) {
+            if (!currentToken) {
+                showStatus('error', 'Спочатку активуйте нейронний зв\'язок!');
+                return;
+            }
+
+            showStatus('info', loadingMessage);
+            showResults();
+
+            const container = document.getElementById(currentView + '-container');
+            if (container) {
+                container.innerHTML = '<div class="cyber-loader"></div>';
+            }
+
+            try {
+                const response = await fetch(endpoint, {
+                    headers: {
+                        'Authorization': `Bearer ${currentToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const rawText = await response.text();
+                let data;
+
+                try {
+                    data = JSON.parse(rawText);
+                } catch (e) {
+                    data = {
+                        error: 'MATRIX_DECODE_ERROR',
+                        raw_data: rawText.substring(0, 1000),
+                        quantum_status: 'DATA_CORRUPTED'
+                    };
+                }
+
+                neuralData = data;
+
+                if (response.ok) {
+                    showStatus('success', `Квантові дані отримано з ${endpoint}`);
+                    renderNeuralData(data, endpoint);
+                    generateAIInsights(data, endpoint);
+                } else {
+                    showStatus('error', `Помилка матриці: ${response.status} ${response.statusText}`);
+                    renderErrorData(data, response.status);
+                }
+
+            } catch (error) {
+                showStatus('error', `Збій нейронної мережі: ${error.message}`);
+                renderErrorData({ error: error.message, type: 'NETWORK_FAILURE' });
+            }
+        }
+
+        // Data rendering functions
+        function renderNeuralData(data, endpoint) {
+            // Update JSON view
+            const jsonContent = document.getElementById('json-content');
+            if (jsonContent) {
+                jsonContent.textContent = JSON.stringify(data, null, 2);
+            }
+
+            // Create chart if in chart view
+            if (currentView === 'chart') {
+                createNeuralChart(data, endpoint);
+            } else if (currentView === '3d') {
+                update3DVisualization(data);
+            }
+        }
+
+        function createNeuralChart(data, endpoint) {
+            const canvas = document.getElementById('neural-chart');
+            const ctx = canvas.getContext('2d');
+
+            if (currentChart) {
+                currentChart.destroy();
+            }
+
+            const chartConfig = generateNeuralChartConfig(data, endpoint);
+
+            if (chartConfig) {
+                currentChart = new Chart(ctx, chartConfig);
+            } else {
+                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+
+                // Custom visualization for unsupported data
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = 'var(--matrix-green)';
+                ctx.font = '20px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText('📊 NEURAL DATA PROCESSED', canvas.width/2, canvas.height/2 - 20);
+                ctx.font = '14px Inter';
+                ctx.fillText('Switch to MATRIX CODE view for detailed analysis', canvas.width/2, canvas.height/2 + 20);
+            }
+        }
+
+        function generateNeuralChartConfig(data, endpoint) {
+            // Enhanced chart generation with cyberpunk styling
+            const baseConfig = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: '#00ff41',
+                            font: { family: 'Inter', weight: 'bold' }
+                        }
+                    },
+                    title: {
+                        display: true,
+                        color: '#00ff41',
+                        font: { size: 18, weight: 'bold', family: 'Inter' }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#00ff41' },
+                        grid: { color: 'rgba(0, 255, 65, 0.1)' }
+                    },
+                    y: {
+                        ticks: { color: '#00ff41' },
+                        grid: { color: 'rgba(0, 255, 65, 0.1)' }
+                    }
+                }
+            };
+
+            // Funnel visualization
+            if (data.data && data.data.funnel) {
+                const funnel = data.data.funnel;
+                const labels = Object.keys(funnel).filter(k => k !== 'warehouse_analytics');
+                const values = labels.map(l => funnel[l]);
+
+                return {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels.map(l => l.replace(/_/g, ' ').toUpperCase()),
+                        datasets: [{
+                            data: values,
+                            backgroundColor: [
+                                'rgba(0, 255, 65, 0.8)',
+                                'rgba(0, 212, 255, 0.8)',
+                                'rgba(255, 0, 110, 0.8)',
+                                'rgba(255, 255, 0, 0.8)',
+                                'rgba(138, 43, 226, 0.8)',
+                                'rgba(255, 69, 0, 0.8)',
+                                'rgba(50, 205, 50, 0.8)',
+                                'rgba(255, 20, 147, 0.8)'
+                            ],
+                            borderColor: '#00ff41',
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        ...baseConfig,
+                        plugins: {
+                            ...baseConfig.plugins,
+                            title: {
+                                ...baseConfig.plugins.title,
+                                text: '🔥 NEURAL SALES FUNNEL'
+                            }
+                        }
+                    }
+                };
+            }
+
+            // Dashboard visualization
+            if (data.data && data.data.summary) {
+                const summary = data.data.summary;
+                return {
+                    type: 'radar',
+                    data: {
+                        labels: ['Clients', 'AKB', 'Hot Leads', 'Revenue (k)', 'Tasks'],
+                        datasets: [{
+                            label: 'CRM Neural Metrics',
+                            data: [
+                                Math.min(summary.total_clients / 10, 100),
+                                Math.min(summary.akb_clients / 5, 100),
+                                Math.min(summary.hot_leads * 20, 100),
+                                Math.min(summary.total_revenue / 1000, 100),
+                                Math.min(summary.urgent_tasks * 10, 100)
+                            ],
+                            backgroundColor: 'rgba(0, 255, 65, 0.2)',
+                            borderColor: '#00ff41',
+                            borderWidth: 3,
+                            pointBackgroundColor: '#00d4ff',
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2,
+                            pointRadius: 6
+                        }]
+                    },
+                    options: {
+                        ...baseConfig,
+                        plugins: {
+                            ...baseConfig.plugins,
+                            title: {
+                                ...baseConfig.plugins.title,
+                                text: '🎯 CYBER DASHBOARD MATRIX'
+                            }
+                        },
+                        scales: {
+                            r: {
+                                ticks: {
+                                    color: '#00ff41',
+                                    backdropColor: 'transparent',
+                                    font: { family: 'Inter' }
+                                },
+                                grid: { color: 'rgba(0, 255, 65, 0.2)' },
+                                pointLabels: {
+                                    color: '#00ff41',
+                                    font: { size: 12, family: 'Inter', weight: 'bold' }
+                                }
+                            }
+                        }
+                    }
+                };
+            }
+
+            // Temperature stats
+            if (data.data && Object.keys(data.data).some(k => ['cold', 'warm', 'hot'].includes(k))) {
+                const temps = data.data;
+                return {
+                    type: 'polarArea',
+                    data: {
+                        labels: Object.keys(temps).map(t => t.toUpperCase()),
+                        datasets: [{
+                            data: Object.values(temps),
+                            backgroundColor: [
+                                'rgba(0, 212, 255, 0.7)',  // cold
+                                'rgba(255, 255, 0, 0.7)',  // warm
+                                'rgba(255, 0, 110, 0.7)',  // hot
+                                'rgba(128, 128, 128, 0.7)' // sleeping
+                            ],
+                            borderColor: '#00ff41',
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        ...baseConfig,
+                        plugins: {
+                            ...baseConfig.plugins,
+                            title: {
+                                ...baseConfig.plugins.title,
+                                text: '🌡️ NEURAL TEMPERATURE MATRIX'
+                            }
+                        }
+                    }
+                };
+            }
+
+            // Array data (leads, clients, etc.)
+            if (Array.isArray(data.data) && data.data.length > 0) {
+                // Status distribution if it's status codes
+                if (data.data[0].code && data.data[0].name) {
+                    return {
+                        type: 'bar',
+                        data: {
+                            labels: data.data.map(s => s.name),
+                            datasets: [{
+                                label: 'Status Distribution',
+                                data: data.data.map(() => 1),
+                                backgroundColor: 'rgba(0, 255, 65, 0.6)',
+                                borderColor: '#00ff41',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            ...baseConfig,
+                            plugins: {
+                                ...baseConfig.plugins,
+                                title: {
+                                    ...baseConfig.plugins.title,
+                                    text: '📋 NEURAL STATUS MATRIX'
+                                }
+                            }
+                        }
+                    };
+                }
+
+                // General array data visualization
+                return {
+                    type: 'line',
+                    data: {
+                        labels: data.data.slice(0, 10).map((_, i) => `Item ${i + 1}`),
+                        datasets: [{
+                            label: 'Data Points',
+                            data: data.data.slice(0, 10).map((item, i) => {
+                                if (typeof item === 'object') {
+                                    return Object.keys(item).length;
+                                }
+                                return Math.random() * 100;
+                            }),
+                            borderColor: '#00ff41',
+                            backgroundColor: 'rgba(0, 255, 65, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        ...baseConfig,
+                        plugins: {
+                            ...baseConfig.plugins,
+                            title: {
+                                ...baseConfig.plugins.title,
+                                text: '📊 NEURAL DATA STREAM'
+                            }
+                        }
+                    }
+                };
+            }
+
+            return null;
+        }
+
+        function update3DVisualization(data) {
+            if (!scene || !cube) return;
+
+            // Animate cube based on data
+            if (data.data && data.data.summary) {
+                const summary = data.data.summary;
+                const scale = Math.max(summary.total_clients / 100, 0.5);
+                cube.scale.set(scale, scale, scale);
+
+                // Change color based on data
+                cube.material.color.setHex(summary.hot_leads > 10 ? 0xff006e : 0x00ff41);
+            }
+
+            // Add data particles
+            const particleCount = Math.min((data.data?.length || 10), 50);
+
+            // Remove old particles
+            scene.children.forEach(child => {
+                if (child.userData.isDataParticle) {
+                    scene.remove(child);
+                }
+            });
+
+            // Add new particles
+            for (let i = 0; i < particleCount; i++) {
+                const geometry = new THREE.SphereGeometry(0.05, 8, 8);
+                const material = new THREE.MeshBasicMaterial({ color: 0x00d4ff });
+                const particle = new THREE.Mesh(geometry, material);
+
+                particle.position.set(
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10
+                );
+                particle.userData.isDataParticle = true;
+
+                scene.add(particle);
+            }
+        }
+
+        function generateAIInsights(data, endpoint) {
+            const insights = document.getElementById('ai-insights');
+            const content = document.getElementById('ai-content');
+
+            let aiAnalysis = generateSmartInsights(data, endpoint);
+
+            content.innerHTML = aiAnalysis;
+            insights.style.display = 'block';
+
+            // Typing effect
+            typeText(content, aiAnalysis);
+        }
+
+        function generateSmartInsights(data, endpoint) {
+            const insights = [];
+
+            // Funnel analysis
+            if (data.data && data.data.funnel) {
+                const funnel = data.data.funnel;
+                const total = Object.values(funnel).reduce((sum, val) => sum + (typeof val === 'number' ? val : 0), 0);
+                const conversion = ((funnel.completed / funnel.queued) * 100).toFixed(1);
+
+                insights.push(`🔥 QUANTUM ANALYSIS: Conversion rate ${conversion}% detected`);
+
+                if (funnel.warehouse_ready > funnel.warehouse_processing) {
+                    insights.push(`⚡ NEURAL ALERT: Warehouse efficiency optimized - ${funnel.warehouse_ready} items ready for quantum teleportation`);
+                }
+
+                if (funnel.declined > total * 0.2) {
+                    insights.push(`⚠️ ANOMALY DETECTED: High decline rate (${((funnel.declined/total)*100).toFixed(1)}%) - neural network suggests process optimization`);
+                }
+            }
+
+            // Dashboard insights
+            if (data.data && data.data.summary) {
+                const s = data.data.summary;
+
+                if (s.hot_leads > 0) {
+                    insights.push(`🚨 URGENT: ${s.hot_leads} hot leads require immediate neural processing`);
+                }
+
+                if (s.churn_risk > 0) {
+                    insights.push(`🔮 PREDICTIVE ALERT: ${s.churn_risk} clients at risk of quantum dissolution`);
+                }
+
+                const efficiency = (s.akb_clients / s.total_clients * 100).toFixed(1);
+                insights.push(`📊 CLIENT MATRIX EFFICIENCY: ${efficiency}% conversion to active neural entities`);
+            }
+
+            // Array data insights
+            if (Array.isArray(data.data)) {
+                insights.push(`🌐 DATA STREAM: ${data.data.length} quantum entities processed`);
+
+                if (data.meta && data.meta.total_leads) {
+                    const efficiency = (data.data.length / data.meta.total_leads * 100).toFixed(1);
+                    insights.push(`⚡ PROCESSING EFFICIENCY: ${efficiency}% of neural data transmitted`);
+                }
+            }
+
+            // Performance insights
+            if (data.meta && data.meta.cache_hit) {
+                insights.push(`🚀 QUANTUM CACHE: Data retrieved from neural memory banks (${data.meta.cache_expires_in}s TTL)`);
+            }
+
+            // Add random AI-like insights
+            const randomInsights = [
+                '🧠 Neural patterns indicate optimal system performance',
+                '⚛️ Quantum encryption layers verified and secure',
+                '🔬 Data integrity confirmed across all neural pathways',
+                '🌌 Matrix synchronization at 99.7% efficiency',
+                '🎯 Predictive algorithms suggest 15% growth potential'
+            ];
+
+            if (Math.random() > 0.5) {
+                insights.push(randomInsights[Math.floor(Math.random() * randomInsights.length)]);
+            }
+
+            return insights.length > 0 ? insights.join('<br><br>') : '🤖 Neural analysis complete. All systems operating within quantum parameters.';
+        }
+
+        function typeText(element, text) {
+            element.innerHTML = '';
+            let index = 0;
+
+            function type() {
+                if (index < text.length) {
+                    element.innerHTML = text.substring(0, index + 1);
+                    index++;
+                    setTimeout(type, Math.random() * 50 + 10);
+                }
+            }
+
+            type();
+        }
+
+        // View switching
+        function switchView(view) {
+            currentView = view;
+
+            // Update buttons
+            document.querySelectorAll('.toggle-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(view + '-btn').classList.add('active');
+
+            // Show/hide containers
+            document.getElementById('chart-container').style.display = view === 'chart' ? 'flex' : 'none';
+            document.getElementById('3d-container').style.display = view === '3d' ? 'flex' : 'none';
+            document.getElementById('json-container').style.display = view === 'json' ? 'block' : 'none';
+
+            // Re-render if we have data
+            if (neuralData) {
+                if (view === 'chart') {
+                    createNeuralChart(neuralData, 'current');
+                } else if (view === '3d') {
+                    update3DVisualization(neuralData);
+                }
+            }
+        }
+
+        // Status and results functions
+        function showStatus(type, message) {
+            const statusDiv = document.getElementById('token-status');
+
+            if (!statusDiv) {
+                console.log('Status div not found');
+                return;
+            }
+
+            let className = 'status-message ';
+            let icon = '';
+
+            switch(type) {
+                case 'success':
+                    className += 'status-success';
+                    icon = 'fas fa-check-circle';
+                    break;
+                case 'error':
+                    className += 'status-error';
+                    icon = 'fas fa-exclamation-triangle';
+                    break;
+                case 'warning':
+                    className += 'status-warning';
+                    icon = 'fas fa-exclamation-circle';
+                    break;
+                case 'info':
+                    className += 'status-info';
+                    icon = 'fas fa-info-circle';
+                    break;
+            }
+
+            statusDiv.innerHTML = `
+                <div class="${className}">
+                    <i class="${icon}"></i>
+                    ${message}
+                </div>
+            `;
+
+            // Auto-hide after 5 seconds unless it's an error
+            if (type !== 'error') {
+                setTimeout(() => {
+                    statusDiv.innerHTML = '';
+                }, 5000);
+            }
+        }
+
+        function showResults() {
+            document.getElementById('results-container').style.display = 'block';
+
+            // Scroll to results
+            document.getElementById('results-container').scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest'
+            });
+        }
+
+        function renderErrorData(errorData, statusCode = 500) {
+            const jsonContent = document.getElementById('json-content');
+            if (jsonContent) {
+                jsonContent.textContent = JSON.stringify({
+                    error: 'NEURAL_NETWORK_ERROR',
+                    status_code: statusCode,
+                    data: errorData,
+                    timestamp: new Date().toISOString(),
+                    quantum_state: 'DEGRADED',
+                    suggestions: [
+                        'Verify neural token authenticity',
+                        'Check quantum endpoint coordinates',
+                        'Restart neural connection',
+                        'Contact AI support matrix'
+                    ]
+                }, null, 2);
+            }
+
+            // Show error visualization
+            if (currentView === 'chart') {
+                const canvas = document.getElementById('neural-chart');
+                if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    ctx.fillStyle = '#ff006e';
+                    ctx.font = 'bold 24px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('⚠️ NEURAL DISRUPTION', canvas.width/2, canvas.height/2 - 30);
+
+                    ctx.font = '16px Inter';
+                    ctx.fillText(`Error Code: ${statusCode}`, canvas.width/2, canvas.height/2 + 10);
+                    ctx.fillText('Switch to MATRIX CODE for details', canvas.width/2, canvas.height/2 + 40);
+                }
+            }
+        }
+
+        // Easter egg function
+        function konami() {
+            if (konamiCode.length === 0) {
+                // Manual trigger
+                activateKonami();
+            } else {
+                showStatus('info', 'Try the Konami Code: ↑↑↓↓←→←→BA');
+            }
+        }
+
+        function activateKonami() {
+            // Rainbow mode
+            document.body.classList.add('konami-activated');
+
+            // Matrix rain intensification
+            const canvas = document.getElementById('matrix-canvas');
+            canvas.style.opacity = '0.3';
+
+            // Status message
+            showStatus('success', '🎉 KONAMI CODE ACTIVATED! Welcome to the Neural Underground!');
+
+            // Add special effects
+            for (let i = 0; i < 50; i++) {
+                setTimeout(() => {
+                    const particle = document.createElement('div');
+                    particle.innerHTML = ['🚀', '⚡', '🔥', '💎', '🌟'][Math.floor(Math.random() * 5)];
+                    particle.style.position = 'fixed';
+                    particle.style.left = Math.random() * 100 + '%';
+                    particle.style.top = Math.random() * 100 + '%';
+                    particle.style.fontSize = '2rem';
+                    particle.style.zIndex = '9999';
+                    particle.style.pointerEvents = 'none';
+                    particle.style.animation = 'float-particle 3s ease-out forwards';
+                    document.body.appendChild(particle);
+
+                    setTimeout(() => particle.remove(), 3000);
+                }, i * 100);
+            }
+
+            // Disable after 10 seconds
+            setTimeout(() => {
+                document.body.classList.remove('konami-activated');
+                canvas.style.opacity = '0.1';
+            }, 10000);
+        }
+
+        // Window resize handler
+        window.addEventListener('resize', function() {
+            const canvas = document.getElementById('matrix-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Add some additional cyberpunk animations
+        document.addEventListener('mousemove', function(e) {
+            // Subtle cursor trail effect
+            if (Math.random() > 0.95) {
+                const trail = document.createElement('div');
+                trail.style.position = 'fixed';
+                trail.style.left = e.clientX + 'px';
+                trail.style.top = e.clientY + 'px';
+                trail.style.width = '2px';
+                trail.style.height = '2px';
+                trail.style.background = '#00ff41';
+                trail.style.borderRadius = '50%';
+                trail.style.pointerEvents = 'none';
+                trail.style.zIndex = '9999';
+                trail.style.animation = 'fade-out 1s ease-out forwards';
+                document.body.appendChild(trail);
+
+                setTimeout(() => trail.remove(), 1000);
+            }
+        });
+
+        // Add fade-out animation to CSS
         const style = document.createElement('style');
         style.textContent = `
-            @keyframes pulse {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.05); }
-                100% { transform: scale(1); }
+            @keyframes fade-out {
+                from { opacity: 1; transform: scale(1); }
+                to { opacity: 0; transform: scale(0); }
+            }
+
+            @keyframes modal-appear {
+                from { opacity: 0; transform: scale(0.8); }
+                to { opacity: 1; transform: scale(1); }
             }
         `;
         document.head.appendChild(style);
