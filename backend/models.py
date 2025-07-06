@@ -20,7 +20,9 @@ def lead_file_upload_path(instance, filename):
 class CustomUser(models.Model):
     INTERFACE_CHOICES = [
         ('admin', 'Адміністратор'),
-        ('accountant', 'Менеджер'),
+        ('accountant', 'Бухгалтер'),
+        ('manager', 'Менеджер'),
+        ('warehouse', 'Складський'),
     ]
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, verbose_name="Користувач")

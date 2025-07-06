@@ -428,10 +428,13 @@ class ExternalLeadSerializer(serializers.ModelSerializer):
         ]
 
 
+# backend/serializers.py - Доповнення MyTokenObtainPairSerializer
+
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         from django.utils import timezone
         from django.contrib.auth.models import Permission
+        from backend.validators.lead_status_validator import LeadStatusValidator
 
         data = super().validate(attrs)
         user = self.user
@@ -462,6 +465,9 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         # 🔥 ДОЗВОЛИ ДЛЯ ФРОНТЕНДУ
         frontend_permissions = self._get_frontend_permissions(user, user_role, all_permissions)
+
+        # 🔥 НОВИЙ БЛОК: ДОЗВОЛИ ПО СТАТУСАХ ЛІДІВ
+        status_permissions = self._get_status_permissions(user, user_role)
 
         # 🔥 СТАТИСТИКА КОРИСТУВАЧА (якщо менеджер)
         user_stats = self._get_user_stats(user, user_role)
@@ -496,6 +502,9 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             # Дозволи для фронтенду
             "frontend_permissions": frontend_permissions,
 
+            # 🔥 НОВИЙ БЛОК: ДОЗВОЛИ ПО СТАТУСАХ
+            "status_permissions": status_permissions,
+
             # Статистика
             "stats": user_stats,
 
@@ -505,11 +514,154 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
                 "permissions_count": len(all_permissions),
                 "groups_count": len(user_groups),
                 "role_level": user_role["level"],
-                "interface_configured": interface_type is not None
+                "interface_configured": interface_type is not None,
+                "status_permissions_included": True
             }
         })
 
         return data
+
+    def _get_status_permissions(self, user, user_role):
+        """🔥 НОВИЙ МЕТОД: Дозволи по статусах лідів"""
+
+        role_code = user_role["code"]
+
+        # Всі можливі статуси з валідатора
+        all_statuses = LeadStatusValidator.STATUS_FLOW
+
+        # Базова структура дозволів
+        status_permissions = {
+            "can_change_status": False,
+            "allowed_transitions": {},
+            "restricted_statuses": [],
+            "role_limitations": {},
+            "status_info": {}
+        }
+
+        # 🔥 ДОЗВОЛИ ЗА РОЛЯМИ
+        if role_code == "superadmin":
+            # Суперадмін - може все
+            status_permissions["can_change_status"] = True
+            for status in all_statuses:
+                status_permissions["allowed_transitions"][status] = LeadStatusValidator.STATUS_FLOW.copy()
+
+        elif role_code == "admin":
+            # Адміністратор - може майже все, крім складських операцій
+            status_permissions["can_change_status"] = True
+            for status in all_statuses:
+                allowed = LeadStatusValidator.STATUS_FLOW.copy()
+                # Адмін не може безпосередньо керувати складськими процесами
+                if status == "warehouse_processing":
+                    allowed = ["warehouse_ready", "preparation"]  # Тільки готовність або повернення
+                status_permissions["allowed_transitions"][status] = allowed
+
+        elif role_code == "accountant":
+            # Бухгалтер - може міняти фінансові та адміністративні статуси
+            status_permissions["can_change_status"] = True
+
+            accountant_transitions = {
+                "queued": ["in_work", "declined"],
+                "in_work": ["awaiting_prepayment", "queued", "declined"],
+                "awaiting_prepayment": ["preparation", "in_work", "declined"],
+                "preparation": ["warehouse_processing", "awaiting_prepayment", "declined"],
+                "warehouse_processing": [],  # Не може керувати складом
+                "warehouse_ready": ["on_the_way"],  # Може відправляти
+                "on_the_way": ["completed", "warehouse_ready", "declined"],  # Може завершувати
+                "completed": [],  # Не може змінювати завершені
+                "declined": []  # Не може змінювати відмовлені
+            }
+
+            status_permissions["allowed_transitions"] = accountant_transitions
+            status_permissions["restricted_statuses"] = ["warehouse_processing"]
+            status_permissions["role_limitations"] = {
+                "warehouse_operations": False,
+                "can_complete": True,
+                "can_decline": True,
+                "financial_control": True
+            }
+
+        elif role_code == "manager":
+            # Менеджер - тільки початкові етапи
+            status_permissions["can_change_status"] = True
+
+            manager_transitions = {
+                "queued": ["in_work", "declined"],
+                "in_work": ["awaiting_prepayment", "queued", "declined"],
+                "awaiting_prepayment": ["in_work", "declined"],
+                "preparation": [],  # Не може після передачі адміну
+                "warehouse_processing": [],
+                "warehouse_ready": [],
+                "on_the_way": [],
+                "completed": [],
+                "declined": []
+            }
+
+            status_permissions["allowed_transitions"] = manager_transitions
+            status_permissions["restricted_statuses"] = [
+                "preparation", "warehouse_processing", "warehouse_ready", "on_the_way", "completed"
+            ]
+            status_permissions["role_limitations"] = {
+                "warehouse_operations": False,
+                "can_complete": False,
+                "can_decline": True,
+                "max_status": "awaiting_prepayment",
+                "description": "Менеджер працює тільки з початковими етапами"
+            }
+
+        elif role_code == "warehouse":
+            # Складський - тільки складські операції
+            status_permissions["can_change_status"] = True
+
+            warehouse_transitions = {
+                "queued": [],
+                "in_work": [],
+                "awaiting_prepayment": [],
+                "preparation": [],
+                "warehouse_processing": ["warehouse_ready", "preparation"],  # Може готувати або повертати
+                "warehouse_ready": ["on_the_way", "warehouse_processing"],  # Може відправляти або повертати
+                "on_the_way": [],
+                "completed": [],
+                "declined": []
+            }
+
+            status_permissions["allowed_transitions"] = warehouse_transitions
+            status_permissions["restricted_statuses"] = [
+                "queued", "in_work", "awaiting_prepayment", "preparation", "on_the_way", "completed", "declined"
+            ]
+            status_permissions["role_limitations"] = {
+                "warehouse_operations": True,
+                "can_complete": False,
+                "can_decline": False,
+                "allowed_statuses": ["warehouse_processing", "warehouse_ready"],
+                "description": "Складський працює тільки зі складськими операціями"
+            }
+
+        else:
+            # Звичайний користувач - нічого не може
+            status_permissions["can_change_status"] = False
+            status_permissions["role_limitations"] = {
+                "description": "Немає дозволів на зміну статусів"
+            }
+
+        # 🔥 ДОДАЄМО ІНФОРМАЦІЮ ПРО СТАТУСИ
+        for status_code in all_statuses:
+            status_permissions["status_info"][status_code] = {
+                "code": status_code,
+                "name": LeadStatusValidator.STATUS_NAMES.get(status_code, status_code),
+                "can_set": status_code in status_permissions.get("allowed_transitions", {}).get("queued", []),
+                "is_restricted": status_code in status_permissions.get("restricted_statuses", [])
+            }
+
+        # 🔥 ДОДАЄМО БІЗНЕС-ПРАВИЛА
+        status_permissions["business_rules"] = {
+            "requires_payment_for_completion": True,
+            "requires_price_for_warehouse": True,
+            "sequential_flow_required": True,
+            "warehouse_financial_control": True,
+            "description": "Статуси змінюються послідовно з фінансовим контролем"
+        }
+
+        return status_permissions
 
     def _determine_user_role(self, user, groups, interface_type):
         """🔥 ВИЗНАЧАЄМО РОЛЬ КОРИСТУВАЧА"""
@@ -588,7 +740,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         }
 
     def _get_frontend_permissions(self, user, user_role, all_permissions):
-        """🔥 ДОЗВОЛИ ДЛЯ ФРОНТЕНДУ"""
+        """🔥 ДОЗВОЛИ ДЛЯ ФРОНТЕНДУ (залишається без змін)"""
 
         permissions = {
             # Ліди
@@ -754,7 +906,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         return permissions
 
     def _get_user_stats(self, user, user_role):
-        """🔥 СТАТИСТИКА КОРИСТУВАЧА"""
+        """🔥 СТАТИСТИКА КОРИСТУВАЧА (залишається без змін)"""
 
         role_code = user_role["code"]
         stats = {

@@ -11,11 +11,6 @@ from NashCRM import settings
 from .models import CustomUser, Lead, Client,  LeadPaymentOperation, EmailIntegrationSettings
 
 
-@admin.register(CustomUser)
-class CustomUserAdmin(ModelAdmin):
-    list_display = ('user', 'interface_type')
-    list_filter = ('interface_type',)
-    search_fields = ('user__username',)
 
 class GoogleAddressWidget(forms.TextInput):
     class Media:
@@ -33,7 +28,6 @@ class GoogleAddressWidget(forms.TextInput):
         return mark_safe(script + html)
 
 
-
 class LeadAdminForm(forms.ModelForm):
     class Meta:
         model = Lead
@@ -41,6 +35,12 @@ class LeadAdminForm(forms.ModelForm):
         widgets = {
             'full_address': GoogleAddressWidget(),
         }
+
+@admin.register(CustomUser)
+class CustomUserAdmin(ModelAdmin):
+    list_display = ('user', 'interface_type')
+    list_filter = ('interface_type',)
+    search_fields = ('user__username',)
 
 
 @admin.register(Lead)
