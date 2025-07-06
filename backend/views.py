@@ -4196,10 +4196,9 @@ def lead_statuses(request):
         for status_code, status_name in status_choices
     ]
 
+    # 🔥 ВИПРАВЛЕНО: статуси прямо в data, без зайвого рівня
     return api_response(
-        data={
-            "statuses": statuses_data
-        },
+        data=statuses_data,  # ← БЕЗ {"statuses": ...}
         meta={
             "total_statuses": len(status_choices),
             "generated_at": timezone.now()

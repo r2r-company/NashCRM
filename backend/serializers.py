@@ -28,6 +28,22 @@ class LeadSerializer(serializers.ModelSerializer):
         model = Lead
         fields = '__all__'
 
+    def __init__(self, *args, **kwargs):
+        """🔥 АВТОМАТИЧНО РОБИМО ВСІ ПОЛЯ НЕОБОВ'ЯЗКОВИМИ ПРИ UPDATE"""
+        super().__init__(*args, **kwargs)
+
+        # Якщо це update (instance існує), робимо всі поля не обов'язковими
+        if self.instance:
+            for field_name, field in self.fields.items():
+                # Пропускаємо read-only поля
+                if not field.read_only:
+                    field.required = False
+                    # Дозволяємо null/blank для більшості полів
+                    if hasattr(field, 'allow_null') and field_name not in ['id', 'created_at']:
+                        field.allow_null = True
+                    if hasattr(field, 'allow_blank') and field_name not in ['id']:
+                        field.allow_blank = True
+
     def get_available_statuses(self, obj):
         """Доступні статуси для переходу"""
         if obj and obj.status:
@@ -80,84 +96,163 @@ class LeadSerializer(serializers.ModelSerializer):
                 detailed_explanation = self._get_detailed_status_explanation(current_status, value, self.instance)
 
                 raise serializers.ValidationError({
-                    'status': {
-                        'error_type': 'STATUS_TRANSITION_BLOCKED',
-                        'message': reason,
-                        'detailed_explanation': detailed_explanation,
-                        'current_status': {
-                            'code': current_status,
-                            'name': LeadStatusValidator.STATUS_NAMES.get(current_status)
-                        },
-                        'attempted_status': {
-                            'code': value,
-                            'name': LeadStatusValidator.STATUS_NAMES.get(value)
-                        },
-                        'available_statuses': [
-                            {
-                                'code': status,
-                                'name': LeadStatusValidator.STATUS_NAMES.get(status),
-                                'description': LeadStatusValidator._get_transition_description(current_status, status)
-                            }
-                            for status in available_transitions
-                        ],
-                        'required_action': LeadStatusValidator.get_next_required_action(self.instance),
-                        'business_rules': self._get_business_rules_explanation(current_status, value)
-                    }
+                    'error_type': 'STATUS_TRANSITION_BLOCKED',
+                    'message': reason,
+                    'detailed_explanation': detailed_explanation,
+                    'current_status': {
+                        'code': current_status,
+                        'name': LeadStatusValidator.STATUS_NAMES.get(current_status)
+                    },
+                    'attempted_status': {
+                        'code': value,
+                        'name': LeadStatusValidator.STATUS_NAMES.get(value)
+                    },
+                    'available_statuses': [
+                        {
+                            'code': status,
+                            'name': LeadStatusValidator.STATUS_NAMES.get(status),
+                            'description': LeadStatusValidator._get_transition_description(current_status, status)
+                        }
+                        for status in available_transitions
+                    ],
+                    'required_action': LeadStatusValidator.get_next_required_action(self.instance),
+                    'business_rules': self._get_business_rules_explanation(current_status, value)
                 })
 
             print(f"✅ ВАЛІДАЦІЯ ПРОЙШЛА: {reason}")
 
         return value
 
+    def validate_phone(self, value):
+        """🔥 ВАЛІДАЦІЯ ТЕЛЕФОНУ - тільки якщо поле передається"""
+        if value:
+            # Нормалізуємо телефон
+            normalized_phone = Client.normalize_phone(value)
+
+            # Для оновлення - перевіряємо дублікати виключаючи поточний лід
+            if self.instance:
+                existing = Lead.objects.filter(
+                    phone=normalized_phone
+                ).exclude(id=self.instance.id).first()
+
+                if existing:
+                    raise serializers.ValidationError(
+                        f'Лід з таким телефоном вже існує (ID: {existing.id})'
+                    )
+            else:
+                # Для створення - перевіряємо всі дублікати
+                if Lead.objects.filter(phone=normalized_phone).exists():
+                    raise serializers.ValidationError(
+                        'Лід з таким телефоном вже існує'
+                    )
+
+            return normalized_phone
+
+        return value
+
+    def validate_order_number(self, value):
+        """🔥 ВАЛІДАЦІЯ НОМЕРА ЗАМОВЛЕННЯ - тільки якщо поле передається"""
+        if value:
+            # Для оновлення - виключаємо поточний лід
+            if self.instance:
+                existing = Lead.objects.filter(
+                    order_number=value
+                ).exclude(id=self.instance.id).first()
+
+                if existing:
+                    raise serializers.ValidationError(
+                        f'Номер замовлення вже використовується в ліді #{existing.id}'
+                    )
+            else:
+                # Для створення
+                if Lead.objects.filter(order_number=value).exists():
+                    raise serializers.ValidationError(
+                        'Номер замовлення вже використовується'
+                    )
+
+        return value
+
     def validate(self, attrs):
-        """Додаткова валідація для повного об'єкта"""
-        # Якщо це оновлення і змінюється статус
-        if self.instance and 'status' in attrs:
-            new_status = attrs['status']
+        """🔥 ЗАГАЛЬНА ВАЛІДАЦІЯ - тільки для переданих полів"""
 
-            # Спеціальна перевірка для completed
-            if new_status == 'completed':
-                # Перевіряємо чи є ціна
-                price = attrs.get('price', self.instance.price)
-                if not price or price <= 0:
+        # Якщо це часткове оновлення
+        if self.instance and self.partial:
+            print(f"📝 ЧАСТКОВЕ ОНОВЛЕННЯ ліда #{self.instance.id}")
+            print(f"   Поля для оновлення: {list(attrs.keys())}")
+
+            # Перевіряємо тільки передані поля
+            if 'status' in attrs:
+                new_status = attrs['status']
+
+                # Спеціальна перевірка для completed
+                if new_status == 'completed':
+                    # Перевіряємо ціну (беремо з attrs або з існуючого об'єкта)
+                    price = attrs.get('price', self.instance.price)
+                    if not price or price <= 0:
+                        raise serializers.ValidationError({
+                            'status': 'Неможливо завершити лід без встановленої ціни',
+                            'current_price': float(self.instance.price or 0),
+                            'solution': 'Встановіть ціну перед завершенням ліда'
+                        })
+
+                    # Перевіряємо повну оплату
+                    if not LeadStatusValidator.is_fully_paid(self.instance):
+                        payment_info = LeadStatusValidator.get_payment_info(self.instance)
+                        raise serializers.ValidationError({
+                            'status': f'Неможливо завершити - не вистачає {payment_info["shortage"]} грн',
+                            'payment_details': payment_info,
+                            'solution': 'Додайте недостаючі платежі'
+                        })
+
+            # Валідація ціни якщо вона змінюється
+            if 'price' in attrs:
+                new_price = attrs['price']
+                if new_price is not None and new_price < 0:
                     raise serializers.ValidationError({
-                        'status': 'Неможливо завершити лід без встановленої ціни'
+                        'price': 'Ціна не може бути від\'ємною'
                     })
 
-                # Перевіряємо чи є повна оплата
-                if not LeadStatusValidator.is_fully_paid(self.instance):
-                    payment_info = LeadStatusValidator.get_payment_info(self.instance)
-                    raise serializers.ValidationError({
-                        'status': f'Неможливо завершити - не вистачає {payment_info["shortage"]} грн',
-                        'payment_details': payment_info
-                    })
-
-        return attrs
+        return super().validate(attrs)
 
     def update(self, instance, validated_data):
         """🔥 ПЕРЕПИСУЄМО МЕТОД UPDATE ДЛЯ ЛОГУВАННЯ"""
         old_status = instance.status
+        old_price = float(instance.price or 0)
+        old_assigned = instance.assigned_to.username if instance.assigned_to else None
+
         new_status = validated_data.get('status', old_status)
+        new_price = validated_data.get('price', old_price)
 
         print(f"📝 СЕРІАЛІЗАТОР UPDATE: Лід #{instance.pk}")
         print(f"   Статус: {old_status} → {new_status}")
+        print(f"   Ціна: {old_price} → {new_price}")
+        print(f"   Оновлювані поля: {list(validated_data.keys())}")
 
         # Виконуємо стандартне оновлення
         updated_instance = super().update(instance, validated_data)
 
-        # Якщо статус змінився - логуємо
+        # Логуємо зміни
+        changes = []
         if old_status != new_status:
-            print(f"✅ СТАТУС ЗМІНЕНО: #{updated_instance.pk} - {old_status} → {new_status}")
-            print(f"   Django signals спрацюють автоматично!")
+            changes.append(f"статус: {old_status} → {new_status}")
+        if old_price != new_price:
+            changes.append(f"ціна: {old_price} → {new_price}")
+
+        new_assigned = updated_instance.assigned_to.username if updated_instance.assigned_to else None
+        if old_assigned != new_assigned:
+            changes.append(f"менеджер: {old_assigned} → {new_assigned}")
+
+        if changes:
+            print(f"✅ ЗМІНИ В ЛІДІ #{updated_instance.pk}: {', '.join(changes)}")
+        else:
+            print(f"ℹ️  Лід #{updated_instance.pk} оновлено без ключових змін")
 
         return updated_instance
 
     def _get_detailed_status_explanation(self, current_status: str, attempted_status: str, lead) -> str:
-        """
-        🔥 ДЕТАЛЬНЕ ПОЯСНЕННЯ ЧОМУ ПЕРЕХІД НЕМОЖЛИВИЙ
-        """
+        """🔥 ДЕТАЛЬНЕ ПОЯСНЕННЯ ЧОМУ ПЕРЕХІД НЕМОЖЛИВИЙ"""
+
         if current_status == 'preparation' and attempted_status == 'warehouse_processing':
-            # Перевіряємо чи є платіжні записи
             from backend.models import LeadPaymentOperation
             has_payments = LeadPaymentOperation.objects.filter(lead=lead).exists()
 
@@ -183,7 +278,7 @@ class LeadSerializer(serializers.ModelSerializer):
                     f"❌ Неможливо завершити - не вистачає {payment_info['shortage']} грн!\n\n"
                     "📋 Що потрібно зробити:\n"
                     "1. Додайте платіж від клієнта:\n"
-                    f"   POST /api/leads/{lead.id}/add-payment/\n"
+                    f"   PATCH /api/leads/{lead.id}/add-payment/\n"
                     "   {\n"
                     "     \"operation_type\": \"received\",\n"
                     f"     \"amount\": {payment_info['shortage']},\n"
@@ -208,9 +303,8 @@ class LeadSerializer(serializers.ModelSerializer):
         return f"Перехід з '{LeadStatusValidator.STATUS_NAMES.get(current_status)}' в '{LeadStatusValidator.STATUS_NAMES.get(attempted_status)}' заборонений бізнес-правилами"
 
     def _get_business_rules_explanation(self, current_status: str, attempted_status: str) -> dict:
-        """
-        🔥 ПОЯСНЕННЯ БІЗНЕС-ПРАВИЛ
-        """
+        """🔥 ПОЯСНЕННЯ БІЗНЕС-ПРАВИЛ"""
+
         rules = {
             'preparation_to_warehouse': {
                 'rule': 'Перед передачею на склад потрібні фінансові записи',
@@ -236,6 +330,18 @@ class LeadSerializer(serializers.ModelSerializer):
         else:
             return rules['sequential_flow']
 
+    def to_representation(self, instance):
+        """🔥 ДОДАЄМО КОРИСНУ ІНФОРМАЦІЮ У ВІДПОВІДЬ"""
+        data = super().to_representation(instance)
+
+        # Додаємо інформацію чи це часткове оновлення
+        if hasattr(self, '_is_partial_update'):
+            data['_meta'] = {
+                'partial_update': True,
+                'updated_fields': getattr(self, '_updated_fields', [])
+            }
+
+        return data
 
 # Всі інші серіалізатори залишаються без змін...
 class ClientSerializer(serializers.ModelSerializer):
@@ -324,25 +430,394 @@ class ExternalLeadSerializer(serializers.ModelSerializer):
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
+        from django.utils import timezone
+        from django.contrib.auth.models import Permission
+
         data = super().validate(attrs)
         user = self.user
 
+        # 🔥 ОСНОВНА ІНФОРМАЦІЯ ПРО КОРИСТУВАЧА
         try:
             custom_user = CustomUser.objects.get(user=user)
             interface_type = custom_user.interface_type
             interface_label = custom_user.get_interface_type_display()
+            avatar_url = custom_user.avatar.url if custom_user.avatar else None
         except CustomUser.DoesNotExist:
             interface_type = None
             interface_label = None
+            avatar_url = None
 
+        # 🔥 ДЕТАЛЬНА ІНФОРМАЦІЯ ПРО РОЛІ ТА ДОЗВОЛИ
+        user_groups = list(user.groups.values_list("name", flat=True))
+        user_permissions = list(user.user_permissions.values_list("codename", flat=True))
+
+        # Отримуємо всі дозволи через групи
+        group_permissions = Permission.objects.filter(
+            group__user=user
+        ).values_list("codename", flat=True)
+        all_permissions = list(set(user_permissions + list(group_permissions)))
+
+        # 🔥 ВИЗНАЧАЄМО РОЛЬ КОРИСТУВАЧА
+        user_role = self._determine_user_role(user, user_groups, interface_type)
+
+        # 🔥 ДОЗВОЛИ ДЛЯ ФРОНТЕНДУ
+        frontend_permissions = self._get_frontend_permissions(user, user_role, all_permissions)
+
+        # 🔥 СТАТИСТИКА КОРИСТУВАЧА (якщо менеджер)
+        user_stats = self._get_user_stats(user, user_role)
+
+        # 🔥 ОНОВЛЮЄМО ВІДПОВІДЬ
         data.update({
+            # Базова інформація
+            "id": user.id,
             "username": user.username,
-            "full_name": f"{user.first_name} {user.last_name}".strip(),
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
+
+            # Системна інформація
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
+            "is_active": user.is_active,
+            "date_joined": user.date_joined,
+            "last_login": user.last_login,
+
+            # Кастомна інформація
             "interface_type": interface_type,
             "interface_label": interface_label,
-            "groups": list(user.groups.values_list("name", flat=True)),
+            "avatar_url": avatar_url,
+
+            # Ролі та дозволи
+            "groups": user_groups,
+            "permissions": all_permissions[:20],  # Обмежуємо кількість
+            "role": user_role,
+
+            # Дозволи для фронтенду
+            "frontend_permissions": frontend_permissions,
+
+            # Статистика
+            "stats": user_stats,
+
+            # Мета-інформація
+            "_meta": {
+                "login_time": timezone.now(),
+                "permissions_count": len(all_permissions),
+                "groups_count": len(user_groups),
+                "role_level": user_role["level"],
+                "interface_configured": interface_type is not None
+            }
         })
+
         return data
+
+    def _determine_user_role(self, user, groups, interface_type):
+        """🔥 ВИЗНАЧАЄМО РОЛЬ КОРИСТУВАЧА"""
+
+        # Суперадмін
+        if user.is_superuser:
+            return {
+                "code": "superadmin",
+                "name": "Суперадміністратор",
+                "level": 100,
+                "description": "Повний доступ до всіх функцій системи",
+                "color": "#e74c3c"
+            }
+
+        # Адміністратор
+        if user.is_staff:
+            return {
+                "code": "admin",
+                "name": "Адміністратор",
+                "level": 90,
+                "description": "Доступ до адмінки та звітів",
+                "color": "#9b59b6"
+            }
+
+        # За interface_type
+        if interface_type == "accountant":
+            return {
+                "code": "accountant",
+                "name": "Бухгалтер",
+                "level": 80,
+                "description": "Робота з лідами та фінансами",
+                "color": "#3498db"
+            }
+        elif interface_type == "manager":
+            return {
+                "code": "manager",
+                "name": "Менеджер",
+                "level": 70,
+                "description": "Робота з клієнтами та лідами",
+                "color": "#2ecc71"
+            }
+        elif interface_type == "warehouse":
+            return {
+                "code": "warehouse",
+                "name": "Складський",
+                "level": 60,
+                "description": "Робота зі складськими операціями",
+                "color": "#f39c12"
+            }
+
+        # За групами
+        if "Managers" in groups or "managers" in groups:
+            return {
+                "code": "manager",
+                "name": "Менеджер",
+                "level": 70,
+                "description": "Робота з клієнтами та лідами",
+                "color": "#2ecc71"
+            }
+        elif "Accountants" in groups or "accountants" in groups:
+            return {
+                "code": "accountant",
+                "name": "Бухгалтер",
+                "level": 80,
+                "description": "Робота з лідами та фінансами",
+                "color": "#3498db"
+            }
+
+        # Звичайний користувач
+        return {
+            "code": "user",
+            "name": "Користувач",
+            "level": 10,
+            "description": "Базовий доступ",
+            "color": "#95a5a6"
+        }
+
+    def _get_frontend_permissions(self, user, user_role, all_permissions):
+        """🔥 ДОЗВОЛИ ДЛЯ ФРОНТЕНДУ"""
+
+        permissions = {
+            # Ліди
+            "leads": {
+                "view": False,
+                "create": False,
+                "edit": False,
+                "delete": False,
+                "change_status": False,
+                "assign_manager": False,
+                "view_payments": False
+            },
+
+            # Клієнти
+            "clients": {
+                "view": False,
+                "create": False,
+                "edit": False,
+                "delete": False,
+                "view_analytics": False,
+                "export": False
+            },
+
+            # Платежі
+            "payments": {
+                "view": False,
+                "add": False,
+                "edit": False,
+                "delete": False
+            },
+
+            # Звіти
+            "reports": {
+                "view": False,
+                "export": False,
+                "detailed": False,
+                "financial": False
+            },
+
+            # Адмін функції
+            "admin": {
+                "user_management": False,
+                "system_settings": False,
+                "database_access": False,
+                "logs": False
+            },
+
+            # Менеджмент
+            "management": {
+                "assign_leads": False,
+                "bulk_operations": False,
+                "team_stats": False,
+                "dashboard": False
+            },
+
+            # Інтерфейс
+            "ui": {
+                "admin_panel": False,
+                "advanced_filters": False,
+                "bulk_edit": False,
+                "export_data": False
+            }
+        }
+
+        role_code = user_role["code"]
+
+        # 🔥 НАЛАШТУВАННЯ ДОЗВОЛІВ ЗА РОЛЯМИ
+        if role_code == "superadmin":
+            # Суперадмін - все дозволено
+            for category in permissions.values():
+                for action in category:
+                    category[action] = True
+
+        elif role_code == "admin":
+            # Адміністратор
+            permissions["leads"] = {
+                "view": True, "create": True, "edit": True, "delete": True,
+                "change_status": True, "assign_manager": True, "view_payments": True
+            }
+            permissions["clients"] = {
+                "view": True, "create": True, "edit": True, "delete": True,
+                "view_analytics": True, "export": True
+            }
+            permissions["payments"] = {
+                "view": True, "add": True, "edit": True, "delete": False
+            }
+            permissions["reports"] = {
+                "view": True, "export": True, "detailed": True, "financial": True
+            }
+            permissions["admin"]["user_management"] = True
+            permissions["admin"]["logs"] = True
+            permissions["management"] = {
+                "assign_leads": True, "bulk_operations": True,
+                "team_stats": True, "dashboard": True
+            }
+            permissions["ui"] = {
+                "admin_panel": True, "advanced_filters": True,
+                "bulk_edit": True, "export_data": True
+            }
+
+        elif role_code == "accountant":
+            # Бухгалтер
+            permissions["leads"] = {
+                "view": True, "create": True, "edit": True, "delete": False,
+                "change_status": True, "assign_manager": False, "view_payments": True
+            }
+            permissions["clients"] = {
+                "view": True, "create": True, "edit": True, "delete": False,
+                "view_analytics": True, "export": True
+            }
+            permissions["payments"] = {
+                "view": True, "add": True, "edit": True, "delete": False
+            }
+            permissions["reports"] = {
+                "view": True, "export": True, "detailed": False, "financial": True
+            }
+            permissions["management"]["dashboard"] = True
+            permissions["ui"] = {
+                "admin_panel": False, "advanced_filters": True,
+                "bulk_edit": False, "export_data": True
+            }
+
+        elif role_code == "manager":
+            # Менеджер
+            permissions["leads"] = {
+                "view": True, "create": True, "edit": True, "delete": False,
+                "change_status": True, "assign_manager": False, "view_payments": False
+            }
+            permissions["clients"] = {
+                "view": True, "create": True, "edit": True, "delete": False,
+                "view_analytics": False, "export": False
+            }
+            permissions["payments"] = {
+                "view": True, "add": False, "edit": False, "delete": False
+            }
+            permissions["reports"] = {
+                "view": False, "export": False, "detailed": False, "financial": False
+            }
+            permissions["management"]["dashboard"] = True
+            permissions["ui"] = {
+                "admin_panel": False, "advanced_filters": False,
+                "bulk_edit": False, "export_data": False
+            }
+
+        elif role_code == "warehouse":
+            # Складський
+            permissions["leads"] = {
+                "view": True, "create": False, "edit": False, "delete": False,
+                "change_status": True, "assign_manager": False, "view_payments": False
+            }
+            permissions["ui"]["advanced_filters"] = False
+
+        # 🔥 ДОДАТКОВО ПЕРЕВІРЯЄМО КОНКРЕТНІ ДОЗВОЛИ Django
+        if "change_lead" in all_permissions:
+            permissions["leads"]["edit"] = True
+        if "delete_lead" in all_permissions:
+            permissions["leads"]["delete"] = True
+        if "view_client" in all_permissions:
+            permissions["clients"]["view"] = True
+        if "add_leadpaymentoperation" in all_permissions:
+            permissions["payments"]["add"] = True
+
+        return permissions
+
+    def _get_user_stats(self, user, user_role):
+        """🔥 СТАТИСТИКА КОРИСТУВАЧА"""
+
+        role_code = user_role["code"]
+        stats = {
+            "leads_assigned": 0,
+            "leads_completed_today": 0,
+            "leads_in_work": 0,
+            "pending_tasks": 0,
+            "performance_score": 0,
+            "weekly_performance": []
+        }
+
+        # Тільки для менеджерів та бухгалтерів
+        if role_code in ["manager", "accountant", "admin", "superadmin"]:
+            try:
+                from django.utils import timezone
+                from datetime import timedelta
+
+                today = timezone.now().date()
+
+                # Статистика по лідах
+                user_leads = Lead.objects.filter(assigned_to=user)
+                stats["leads_assigned"] = user_leads.count()
+                stats["leads_completed_today"] = user_leads.filter(
+                    status="completed",
+                    status_updated_at__date=today
+                ).count()
+                stats["leads_in_work"] = user_leads.filter(
+                    status__in=["in_work", "preparation", "awaiting_prepayment"]
+                ).count()
+
+                # Задачі (якщо є модель ClientTask)
+                try:
+                    stats["pending_tasks"] = ClientTask.objects.filter(
+                        assigned_to=user,
+                        status__in=["pending", "in_progress"]
+                    ).count()
+                except:
+                    pass
+
+                # Тижнева продуктивність (останні 7 днів)
+                weekly_stats = []
+                for i in range(7):
+                    day = today - timedelta(days=i)
+                    completed = user_leads.filter(
+                        status="completed",
+                        status_updated_at__date=day
+                    ).count()
+                    weekly_stats.append({
+                        "date": day.strftime("%Y-%m-%d"),
+                        "completed": completed
+                    })
+
+                stats["weekly_performance"] = list(reversed(weekly_stats))
+
+                # Простий розрахунок продуктивності (на основі тижневих результатів)
+                weekly_total = sum(day["completed"] for day in weekly_stats)
+                stats["performance_score"] = min(weekly_total * 5, 100)  # Максимум 100
+
+            except Exception as e:
+                # Якщо помилка - повертаємо порожню статистику
+                print(f"❌ Помилка при отриманні статистики для {user.username}: {e}")
+
+        return stats
 
 
 User = get_user_model()
