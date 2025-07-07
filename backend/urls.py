@@ -1,6 +1,7 @@
 # backend/urls.py - ВИПРАВЛЕННЯ
 
 from django.urls import path, include
+from django.views.generic import TemplateView
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -13,7 +14,7 @@ from backend.views import (
     ClientInteractionViewSet, ClientTaskViewSet,
     crm_dashboard, update_all_client_metrics,
     create_follow_up_tasks, client_segments_for_marketing,
-    CreateLeadView, check_lead_duplicate, map_config_api, lead_statuses
+    CreateLeadView, check_lead_duplicate, map_config_api, lead_statuses, add_lead_payment
 )
 
 # 🚀 Стандартний роутер Django REST Framework
@@ -42,6 +43,7 @@ urlpatterns = [
     path('analytics/leads-report/', leads_report, name='analytics_leads_report'),
     path('analytics/detailed-report/', LeadsReportView.as_view(), name='analytics_detailed'),
     path('analytics/payments/', all_payments, name='analytics_payments'),
+    path('payments/leads/<int:id_lead>/', add_lead_payment, name='add_lead_payment'),
 
     # 🌍 UTILITIES
     path('utils/geocode/', geocode_address, name='utils_geocode'),
@@ -83,5 +85,7 @@ urlpatterns = [
 
     # 🚀 ROUTER URLS (має бути в кінці)
     path('', include(router.urls)),
+    path("aut/", TemplateView.as_view(template_name="aut.html"), name="aut-debug"),
+
 ]
 

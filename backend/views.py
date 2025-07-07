@@ -3038,6 +3038,67 @@ class LeadViewSet(viewsets.ModelViewSet):
                 status_code=500
             )
 
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def add_lead_payment(request, id_lead):
+    """💰 Додавання платежу до ліда"""
+    try:
+        lead = Lead.objects.get(id=id_lead)
+    except Lead.DoesNotExist:
+        return api_response(
+            errors={'lead': 'Лід не знайдено'},
+            status_code=404
+        )
+
+    operation_type = request.data.get('operation_type')
+    amount = request.data.get('amount')
+    comment = request.data.get('comment', '')
+
+    if not operation_type or not amount:
+        return api_response(
+            errors={
+                'required_fields': 'operation_type і amount обов\'язкові',
+                'example': {
+                    'operation_type': 'received',
+                    'amount': 1500,
+                    'comment': 'Отримано від клієнта'
+                }
+            },
+            status_code=400
+        )
+
+    payment = LeadPaymentOperation.objects.create(
+        lead=lead,
+        operation_type=operation_type,
+        amount=amount,
+        comment=comment
+    )
+
+    smart_cache_invalidation(lead_id=lead.id)
+
+    return api_response(
+        data={
+            'payment': {
+                'id': payment.id,
+                'type': payment.operation_type,
+                'amount': float(payment.amount),
+                'comment': payment.comment,
+                'created_at': payment.created_at,
+            },
+            'lead_payment_info': LeadStatusValidator.get_payment_info(lead)
+        },
+        meta={
+            "payment_added": True,
+            "lead_id": lead.id
+        },
+        message='✅ Платіж додано',
+        status_code=201
+    )
+
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def all_payments(request):

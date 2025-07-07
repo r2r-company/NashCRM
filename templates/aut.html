@@ -1,0 +1,23 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <title>CRM Доступи</title>
+  <link rel="stylesheet" href="{% static 'css/style.css' %}">
+  <script src="{% static 'js/script.js' %}" defer></script>
+</head>
+<body>
+  <div class="container">
+    <h1>🔐 Панель доступів користувача</h1>
+    <div style="margin-bottom: 20px;">
+      <input type="text" id="username" placeholder="Логін">
+      <input type="password" id="password" placeholder="Пароль">
+      <button onclick="authLogin()">Увійти</button>
+    </div>
+    <div id="login-result" class="status-message"></div>
+    <div id="role-info" style="margin: 1rem 0;"></div>
+    <div id="permissions-grid" style="display: none;"></div>
+  </div>
+</body>
+</html>
