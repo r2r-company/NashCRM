@@ -1,14 +1,16 @@
-from decimal import Decimal
-
+# backend/views.py - ВИПРАВЛЕНІ ІМПОРТИ (замініть на початку файлу)
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.db.models import Count, Sum, DurationField, ExpressionWrapper, F, Q, Avg, Case, When, DecimalField, Prefetch
 from django.shortcuts import render
-from django.utils import timezone  # ← ЦЕЙ РЯДОК ВІРОГІДНО Є
+from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.utils.timezone import now
-from jsonschema.exceptions import ValidationError
+
+
+# 🔥 ВИПРАВЛЕННЯ: Правильний імпорт ValidationError з DRF
+from rest_framework.exceptions import ValidationError
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -16,22 +18,21 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-import requests
-from django.contrib.auth.models import Permission
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-# 🚀 ДОДАЙТЕ ЦІ ІМПОРТИ:
+import requests
 from datetime import datetime, timedelta
 
 from NashCRM import settings
+from backend import serializers
 from backend.forms import LeadsReportForm
 from backend.models import CustomUser, Lead, Client, LeadPaymentOperation, LeadFile, ClientInteraction, ClientTask
 from backend.serializers import LeadSerializer, ClientSerializer, ExternalLeadSerializer, MyTokenObtainPairSerializer, \
     ManagerSerializer, ClientTaskSerializer, ClientInteractionSerializer
 from backend.services.lead_creation_service import create_lead_with_logic
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-# 🚀 УТИЛІТА ДЛЯ РОЗУМНОГО ОЧИЩЕННЯ КЕШУ
-from backend.utils.api_responses import APIResponse, LeadStatusResponse, StatusChangeError
+# 🔥 ВИПРАВЛЕННЯ: Правильні імпорти для API responses
+from backend.utils.api_responses import APIResponse, StatusChangeError, ErrorType, LeadStatusResponse
 from backend.validators.lead_status_validator import LeadStatusValidator, validate_lead_status_change
 
 
@@ -143,16 +144,16 @@ def ping(request):
     except CustomUser.DoesNotExist:
         system_status["user"]["interface_type"] = "default"
 
-    return api_response(
+    return APIResponse.success(  # ← ЗАМІСТЬ api_response
         data=system_status,
+        message=f"🏓 Pong! Привіт, {request.user.username}! Система працює нормально.",
         meta={
             "ping_time": timezone.now(),
             "server_time": timezone.now(),
-            "response_time_ms": 1,  # Можна додати реальний підрахунок часу відповіді
-            "system_uptime": "unknown",  # Можна додати реальний uptime
+            "response_time_ms": 1,
+            "system_uptime": "unknown",
             "version": "1.0.0"
-        },
-        message=f"🏓 Pong! Привіт, {request.user.username}! Система працює нормально."
+        }
     )
 
 
@@ -214,15 +215,23 @@ def home(request):
     })
 
 
+# backend/views.py - ТІЛЬКИ ВИПРАВЛЕННЯ LoginView та MyTokenObtainPairView
+
+from backend.utils.api_responses import APIResponse, ErrorType
+
+
 class MyTokenObtainPairView(TokenObtainPairView):
-    """🔐 Отримання JWT токенів"""
+    """🔐 Отримання JWT токенів - ВИПРАВЛЕНО"""
     serializer_class = MyTokenObtainPairSerializer
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
+        """🔥 ГОЛОВНЕ ВИПРАВЛЕННЯ: правильна структура відповіді"""
         response = super().post(request, *args, **kwargs)
 
         if response.status_code != 200:
+            # 🔥 БУЛО: складна структура помилки
+            # 🔥 СТАЛО: використовуємо APIResponse.error
             return APIResponse.error(
                 error_type=ErrorType.AUTHENTICATION,
                 message="Невірні облікові дані",
@@ -232,12 +241,12 @@ class MyTokenObtainPairView(TokenObtainPairView):
                 },
                 meta={
                     "login_attempt_time": timezone.now(),
-                    "ip_address": request.META.get('REMOTE_ADDR'),
-                    "user_agent": request.META.get('HTTP_USER_AGENT', '')[:100]
+                    "ip_address": request.META.get('REMOTE_ADDR')
                 },
                 status_code=response.status_code
             )
 
+        # Якщо успіх - розбираємо дані
         raw_data = response.data
         tokens = {
             "access": raw_data.get("access"),
@@ -249,7 +258,9 @@ class MyTokenObtainPairView(TokenObtainPairView):
             if k not in ["access", "refresh"]
         }
 
-        response.data = APIResponse.success(
+        # 🔥 БУЛО: response.data = APIResponse.success(...).data
+        # 🔥 СТАЛО: return APIResponse.success(...)
+        return APIResponse.success(
             data={
                 "tokens": tokens,
                 "user": user_info
@@ -258,30 +269,23 @@ class MyTokenObtainPairView(TokenObtainPairView):
             meta={
                 "login_time": timezone.now(),
                 "token_type": "JWT",
-                "access_token_expires_in": 3600,
-                "refresh_token_expires_in": 86400,
-                "authentication_method": "jwt_pair",
-                "ip_address": request.META.get('REMOTE_ADDR'),
-                "session_info": {
-                    "session_key": request.session.session_key,
-                    "is_new_session": request.session.is_empty()
-                }
+                "authentication_method": "jwt_pair"
             }
-        ).data
-
-        return response
-
+        )
 
 
 class LoginView(APIView):
-    """🔐 Стандартна авторизація"""
+    """🔐 Стандартна авторизація - ВИПРАВЛЕНО"""
     permission_classes = [AllowAny]
 
     def post(self, request):
+        """🔥 ГОЛОВНЕ ВИПРАВЛЕННЯ: правильна структура відповіді"""
         username = request.data.get("username")
         password = request.data.get("password")
 
         if not username or not password:
+            # 🔥 БУЛО: складна структура помилки
+            # 🔥 СТАЛО: використовуємо APIResponse.validation_error
             return APIResponse.validation_error(
                 message="Логін та пароль обов'язкові",
                 field_errors={
@@ -296,6 +300,8 @@ class LoginView(APIView):
 
         user = authenticate(username=username, password=password)
         if user is None:
+            # 🔥 БУЛО: складна структура помилки
+            # 🔥 СТАЛО: використовуємо APIResponse.error
             return APIResponse.error(
                 error_type=ErrorType.AUTHENTICATION,
                 message="Невірний логін або пароль",
@@ -306,7 +312,6 @@ class LoginView(APIView):
                 meta={
                     "login_attempt_time": timezone.now(),
                     "ip_address": request.META.get('REMOTE_ADDR'),
-                    "user_agent": request.META.get('HTTP_USER_AGENT', '')[:100],
                     "failed_login": True
                 },
                 status_code=401
@@ -315,17 +320,12 @@ class LoginView(APIView):
         # Генеруємо токени
         refresh = RefreshToken.for_user(user)
 
-        # Отримуємо додаткову інформацію про користувача
+        # Отримуємо інформацію про користувача
         try:
             custom_user = CustomUser.objects.select_related('user').get(user=user)
             interface_type = custom_user.interface_type
-            avatar_url = custom_user.avatar.url if custom_user.avatar else None
         except CustomUser.DoesNotExist:
             interface_type = "default"
-            avatar_url = None
-
-        groups = list(user.groups.values_list("name", flat=True))
-        permissions = list(user.user_permissions.values_list("codename", flat=True))
 
         user_data = {
             "id": user.id,
@@ -333,16 +333,9 @@ class LoginView(APIView):
             "email": user.email,
             "first_name": user.first_name,
             "last_name": user.last_name,
-            "full_name": f"{user.first_name} {user.last_name}".strip(),
             "interface_type": interface_type,
-            "avatar_url": avatar_url,
-            "groups": groups,
-            "permissions": permissions,
             "is_staff": user.is_staff,
-            "is_superuser": user.is_superuser,
             "is_active": user.is_active,
-            "last_login": user.last_login,
-            "date_joined": user.date_joined,
         }
 
         tokens_data = {
@@ -351,6 +344,8 @@ class LoginView(APIView):
             "token_type": "Bearer"
         }
 
+        # 🔥 БУЛО: складна структура відповіді
+        # 🔥 СТАЛО: використовуємо APIResponse.success
         return APIResponse.success(
             data={
                 "tokens": tokens_data,
@@ -359,19 +354,8 @@ class LoginView(APIView):
             message=f"✅ Ласкаво просимо, {user.first_name or user.username}!",
             meta={
                 "login_time": timezone.now(),
-                "session_expires_in": 86400,
                 "authentication_method": "username_password",
-                "ip_address": request.META.get('REMOTE_ADDR'),
-                "user_agent": request.META.get('HTTP_USER_AGENT', '')[:100],
-                "session_info": {
-                    "session_key": request.session.session_key,
-                    "is_new_session": request.session.is_empty()
-                },
-                "security_info": {
-                    "last_login": user.last_login,
-                    "login_count": getattr(user, 'login_count', 0) + 1,
-                    "account_status": "active" if user.is_active else "inactive"
-                }
+                "ip_address": request.META.get('REMOTE_ADDR')
             }
         )
 
@@ -1569,9 +1553,6 @@ def client_segments_for_marketing(request):
         )
 
 
-
-
-
 # 🚀 ФУНКЦІЯ ПЕРЕВІРКИ ДУБЛІКАТІВ
 def check_duplicate_lead(phone, full_name=None, order_number=None, time_window_minutes=30):
     """
@@ -1641,26 +1622,25 @@ class ExternalLeadView(APIView):
             )
 
             if is_duplicate:
-                print(f"🚫 ДУБЛІКАТ! Знайдено існуючий лід #{existing_lead.id}")
-                return api_response(
-                    errors={
-                        "type": "DUPLICATE_LEAD",
-                        "message": f"Лід з таким номером телефону вже існує",
-                        "existing_lead": {
-                            "id": existing_lead.id,
-                            "full_name": existing_lead.full_name,
-                            "phone": existing_lead.phone,
-                            "created_at": existing_lead.created_at,
-                            "status": existing_lead.status
-                        },
+                return APIResponse.duplicate_error(  # ← ЗАМІСТЬ api_response
+                    resource="Лід",
+                    duplicate_field="телефон",
+                    duplicate_value=phone,
+                    existing_resource={
+                        "id": existing_lead.id,
+                        "full_name": existing_lead.full_name,
+                        "phone": existing_lead.phone,
+                        "created_at": existing_lead.created_at,
+                        "status": existing_lead.status
+                    },
+                    meta={
                         "duplicate_check": {
                             "phone": phone,
                             "normalized_phone": Client.normalize_phone(phone) if phone else None,
                             "full_name": full_name,
                             "time_window": "30 minutes"
                         }
-                    },
-                    status_code=status.HTTP_409_CONFLICT
+                    }
                 )
 
             print(f"✅ Не дублікат - створюємо новий лід")
@@ -1671,7 +1651,7 @@ class ExternalLeadView(APIView):
                 manager_id=lead.assigned_to.id if lead.assigned_to else None
             )
 
-            return api_response(
+            return APIResponse.success(  # ← ЗАМІСТЬ api_response
                 data={
                     "lead": {
                         "id": lead.id,
@@ -1682,22 +1662,20 @@ class ExternalLeadView(APIView):
                         "created_at": lead.created_at,
                     }
                 },
+                message=f"✅ Лід створено для {lead.full_name} — статус: {context['final_status'].upper()}",
                 meta={
                     "created": True,
                     "details": context,
                     "processing_time": timezone.now()
                 },
-                message=f"✅ Лід створено для {lead.full_name} — статус: {context['final_status'].upper()}",
-                status_code=status.HTTP_201_CREATED
+                status_code=201
             )
 
-        return api_response(
-            errors={
-                "type": "VALIDATION_ERROR",
-                "details": serializer.errors
-            },
-            status_code=status.HTTP_400_BAD_REQUEST
-        )
+            # Помилка валідації
+            return APIResponse.validation_error(  # ← ЗАМІСТЬ api_response
+                message="Помилка валідації даних",
+                field_errors=serializer.errors
+            )
 
 
 @api_view(['GET'])
@@ -1930,7 +1908,7 @@ class LeadsReportView(APIView):
         cached_result = cache.get(cache_key)
 
         if cached_result:
-            return api_response(
+            return APIResponse.success(  # ← ЗАМІСТЬ api_response
                 data=cached_result,
                 meta={
                     "cache_hit": True,
@@ -2126,20 +2104,14 @@ class LeadsReportView(APIView):
         # Кешуємо на 2 хвилини
         cache.set(cache_key, result, 120)
 
-        return api_response(
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
             data=result,
             meta={
                 "report_type": "detailed_leads_analysis",
                 "filters_applied": filters_applied,
                 "data_source": "database",
                 "cache_expires_in": 120,
-                "generated_at": timezone.now(),
-                "processing_time": "real_time",
-                "report_scope": {
-                    "total_leads_analyzed": leads.count(),
-                    "managers_included": len(managers_report),
-                    "period_days": (date_to - date_from).days if date_from and date_to else None
-                }
+                "generated_at": timezone.now()
             }
         )
 
@@ -2150,9 +2122,9 @@ def geocode_address(request):
     """🗺️ Геокодування адреси через Google Maps API"""
     address = request.query_params.get("address")
     if not address:
-        return api_response(
-            errors={"address": "Потрібно передати параметр ?address="},
-            status_code=400
+        return APIResponse.validation_error(  # ← ЗАМІСТЬ api_response
+            message="Потрібно передати параметр ?address=",
+            field_errors={"address": ["Цей параметр обов'язковий"]}
         )
 
     # Геокодування можна кешувати довго
@@ -2218,16 +2190,38 @@ def geocode_address(request):
 
     cache.set(cache_key, geocoding_result, 86400)  # Кешуємо на день
 
-    return api_response(
+    if cached_result:
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
+            data=cached_result,
+            meta={
+                "cache_hit": True,
+                "cache_expires_in": 86400,
+                "geocoding_service": "Google Maps API"
+            }
+        )
+
+        # Помилка API
+    if response_data.get("status") != "OK":
+        return APIResponse.system_error(  # ← ЗАМІСТЬ api_response
+            message="Помилка Google Maps API",
+            exception_details={
+                "geocoding_error": "Нічого не знайдено або помилка Google Maps",
+                "google_status": response_data.get("status"),
+                "google_error": response_data.get("error_message", "")
+            }
+        )
+
+        # Успіх
+    return APIResponse.success(  # ← ЗАМІСТЬ api_response
         data=geocoding_result,
+        message=f"Знайдено координати для: {result_data['formatted_address']}",
         meta={
             "cache_hit": False,
             "cache_expires_in": 86400,
             "geocoding_service": "Google Maps API",
             "response_time": timezone.now(),
             "accuracy": result_data["geometry"]["location_type"]
-        },
-        message=f"Знайдено координати для: {result_data['formatted_address']}"
+        }
     )
 
 
@@ -2301,20 +2295,19 @@ def map_search_view(request):
 @permission_classes([IsAuthenticated])
 def map_config_api(request):
     """🗺️ API для отримання конфігурації карти"""
-
     if not request.user.is_staff:
-        return api_response(
-            errors={"permission": "Доступ тільки для адміністраторів"},
-            status_code=403
+        return APIResponse.permission_error(  # ← ЗАМІСТЬ api_response
+            message="Доступ тільки для адміністраторів",
+            required_role="staff"
         )
 
-    if not hasattr(settings, 'GOOGLE_MAPS_API_KEY') or not settings.GOOGLE_MAPS_API_KEY:
-        return api_response(
-            errors={
+    if not hasattr(settings, 'GOOGLE_MAPS_API_KEY'):
+        return APIResponse.system_error(  # ← ЗАМІСТЬ api_response
+            message="Google Maps API ключ не налаштований",
+            exception_details={
                 "configuration": "Google Maps API ключ не налаштований",
                 "solution": "Додайте GOOGLE_MAPS_API_KEY в settings.py"
-            },
-            status_code=500
+            }
         )
 
     config_data = {
@@ -2340,7 +2333,7 @@ def map_config_api(request):
         }
     }
 
-    return api_response(
+    return APIResponse.success(  # ← ЗАМІСТЬ api_response
         data=config_data,
         meta={
             "config_loaded_at": timezone.now(),
@@ -2659,7 +2652,7 @@ class LeadViewSet(viewsets.ModelViewSet):
             )
 
     def update(self, request, *args, **kwargs):
-        """📝 Оновлення ліда"""
+        """📝 Оновлення ліда з правильною обробкою помилок статусу"""
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
 
@@ -2676,38 +2669,120 @@ class LeadViewSet(viewsets.ModelViewSet):
         try:
             serializer.is_valid(raise_exception=True)
         except ValidationError as e:
-            # Обробляємо помилки валідації статусу
-            if hasattr(e, 'detail') and isinstance(e.detail, dict):
-                for field, errors in e.detail.items():
-                    if field == 'status' and isinstance(errors, list):
-                        for error in errors:
-                            if isinstance(error, dict) and 'type' in error:
-                                # Це помилка зміни статусу
-                                if error['type'] == StatusChangeError.INSUFFICIENT_FUNDS.value:
-                                    return LeadStatusResponse.missing_payment(
-                                        current_status=error['details']['current_status']['code'],
-                                        attempted_status=error['details']['attempted_status']['code'],
-                                        payment_info=error['details']['payment_info'],
-                                        required_amount=error['details'].get('required_payment')
-                                    )
-                                elif error['type'] == StatusChangeError.MISSING_PRICE.value:
-                                    return LeadStatusResponse.missing_price(
-                                        current_status=error['details']['current_status']['code'],
-                                        attempted_status=error['details']['attempted_status']['code'],
-                                        lead_id=instance.id
-                                    )
-                                elif error['type'] == StatusChangeError.INVALID_TRANSITION.value:
-                                    return LeadStatusResponse.invalid_transition(
-                                        current_status=error['details']['current_status']['code'],
-                                        attempted_status=error['details']['attempted_status']['code'],
-                                        available_transitions=error['details']['available_transitions'],
-                                        reason=error['message']
-                                    )
+            print(f"❌ Помилка валідації: {e.detail}")
 
-            # Загальна помилка валідації
+            # 🔥 ГОЛОВНА ПЕРЕВІРКА: чи це наша помилка переходу статусу?
+
+            # Спочатку перевіряємо атрибут серіалізатора
+            if hasattr(serializer, '_status_transition_error'):
+                error_info = serializer._status_transition_error
+
+                current_status = error_info['current_status']
+                attempted_status = error_info['attempted_status']
+                reason = error_info['reason']
+                lead_instance = error_info['instance']
+
+                # Отримуємо доступні переходи
+                available_transitions = LeadStatusValidator.get_allowed_transitions(current_status, lead_instance)
+
+                print(f"🔍 Обробляємо помилку переходу статусу: {current_status} → {attempted_status}")
+
+                # 🔥 ПОВЕРТАЄМО ПРАВИЛЬНУ СТРУКТУРУ data/meta
+                return Response({
+                    "data": {
+                        "success": False
+                    },
+                    "meta": {
+                        "message": reason,
+                        "errors": {
+                            "type": "INVALID_TRANSITION",
+                            "message": reason,
+                            "details": {
+                                "current_status": {
+                                    "code": current_status,
+                                    "name": LeadStatusValidator.STATUS_NAMES.get(current_status, current_status)
+                                },
+                                "attempted_status": {
+                                    "code": attempted_status,
+                                    "name": LeadStatusValidator.STATUS_NAMES.get(attempted_status, attempted_status)
+                                },
+                                "available_transitions": [
+                                    {
+                                        "code": status,
+                                        "name": LeadStatusValidator.STATUS_NAMES.get(status, status),
+                                        "description": f"Перейти в {status}"
+                                    }
+                                    for status in available_transitions
+                                ]
+                            }
+                        },
+                        "timestamp": timezone.now().isoformat(),
+                        "status_code": 400
+                    }
+                }, status=400)
+
+            # 🔥 ДРУГИЙ ВАРІАНТ: перевіряємо чи є "STATUS_TRANSITION_ERROR" в помилках
+            if 'status' in e.detail:
+                status_errors = e.detail['status']
+
+                # Якщо це список і містить наш маркер
+                if isinstance(status_errors, list):
+                    for error in status_errors:
+                        if str(error) == "STATUS_TRANSITION_ERROR":
+                            # Якщо знайшли наш маркер, але немає атрибута - щось пішло не так
+                            print("⚠️ Знайдено STATUS_TRANSITION_ERROR, але немає _status_transition_error атрибута")
+
+                            # Спробуємо відтворити інформацію з request.data
+                            attempted_status = request.data.get('status')
+                            current_status = instance.status
+
+                            if attempted_status:
+                                available_transitions = LeadStatusValidator.get_allowed_transitions(current_status,
+                                                                                                    instance)
+
+                                return Response({
+                                    "data": {
+                                        "success": False
+                                    },
+                                    "meta": {
+                                        "message": f"Неможливо перейти з '{LeadStatusValidator.STATUS_NAMES.get(current_status)}' в '{LeadStatusValidator.STATUS_NAMES.get(attempted_status)}'",
+                                        "errors": {
+                                            "type": "INVALID_TRANSITION",
+                                            "message": f"Недозволений перехід статусу",
+                                            "details": {
+                                                "current_status": {
+                                                    "code": current_status,
+                                                    "name": LeadStatusValidator.STATUS_NAMES.get(current_status,
+                                                                                                 current_status)
+                                                },
+                                                "attempted_status": {
+                                                    "code": attempted_status,
+                                                    "name": LeadStatusValidator.STATUS_NAMES.get(attempted_status,
+                                                                                                 attempted_status)
+                                                },
+                                                "available_transitions": [
+                                                    {
+                                                        "code": status,
+                                                        "name": LeadStatusValidator.STATUS_NAMES.get(status, status),
+                                                        "description": f"Перейти в {status}"
+                                                    }
+                                                    for status in available_transitions
+                                                ]
+                                            }
+                                        },
+                                        "timestamp": timezone.now().isoformat(),
+                                        "status_code": 400
+                                    }
+                                }, status=400)
+
+            # 🔥 ДЛЯ ІНШИХ ПОМИЛОК ВАЛІДАЦІЇ - використовуємо APIResponse
             return APIResponse.validation_error(
                 message="Помилка валідації даних",
-                field_errors=e.detail if hasattr(e, 'detail') else {"general": [str(e)]}
+                field_errors=e.detail if hasattr(e, 'detail') else {"general": [str(e)]},
+                meta={
+                    "validation_time": timezone.now(),
+                    "lead_id": instance.id
+                }
             )
 
         try:
@@ -2717,39 +2792,24 @@ class LeadViewSet(viewsets.ModelViewSet):
                 manager_id=updated_instance.assigned_to.id if updated_instance.assigned_to else None
             )
 
-            # Визначаємо зміни
             changes = {}
             if old_data['status'] != updated_instance.status:
-                changes['status'] = {
-                    'old': old_data['status'],
-                    'new': updated_instance.status
-                }
+                changes['status'] = {'old': old_data['status'], 'new': updated_instance.status}
 
             if old_data['price'] != float(updated_instance.price or 0):
-                changes['price'] = {
-                    'old': old_data['price'],
-                    'new': float(updated_instance.price or 0)
-                }
+                changes['price'] = {'old': old_data['price'], 'new': float(updated_instance.price or 0)}
 
             new_assigned = updated_instance.assigned_to.username if updated_instance.assigned_to else None
             if old_data['assigned_to'] != new_assigned:
-                changes['assigned_to'] = {
-                    'old': old_data['assigned_to'],
-                    'new': new_assigned
-                }
+                changes['assigned_to'] = {'old': old_data['assigned_to'], 'new': new_assigned}
 
             if old_data['full_name'] != updated_instance.full_name:
-                changes['full_name'] = {
-                    'old': old_data['full_name'],
-                    'new': updated_instance.full_name
-                }
+                changes['full_name'] = {'old': old_data['full_name'], 'new': updated_instance.full_name}
 
             if old_data['phone'] != updated_instance.phone:
-                changes['phone'] = {
-                    'old': old_data['phone'],
-                    'new': updated_instance.phone
-                }
+                changes['phone'] = {'old': old_data['phone'], 'new': updated_instance.phone}
 
+            # 🔥 ПОВЕРТАЄМО УСПІШНУ ВІДПОВІДЬ З ПРАВИЛЬНОЮ СТРУКТУРОЮ
             return APIResponse.success(
                 data=serializer.data,
                 message=f"✅ Лід #{updated_instance.id} успішно оновлено",
@@ -2764,9 +2824,10 @@ class LeadViewSet(viewsets.ModelViewSet):
                     "payment_info": LeadStatusValidator.get_payment_info(updated_instance)
                 }
             )
+
         except Exception as e:
             return APIResponse.system_error(
-                message=f"Помилка оновлення ліда: {str(e)}",
+                message=f"❌ Помилка оновлення ліда: {str(e)}",
                 exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
@@ -3653,7 +3714,6 @@ class CreateLeadView(APIView):
             return APIResponse
 
 
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def add_lead_payment(request, id_lead):
@@ -3710,7 +3770,6 @@ def add_lead_payment(request, id_lead):
         message='✅ Платіж додано',
         status_code=201
     )
-
 
 
 @api_view(['GET'])
@@ -3863,7 +3922,7 @@ class ManagerViewSet(viewsets.ModelViewSet):
 
             managers_with_stats.append(serializer_data)
 
-        return api_response(
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
             data=managers_with_stats,
             meta={
                 "total_managers": len(managers_with_stats),
@@ -3884,61 +3943,59 @@ class ManagerViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
 
         if not serializer.is_valid():
-            print(f"❌ Validation errors: {serializer.errors}")
-            return api_response(
-                errors={
-                    "validation_errors": serializer.errors,
-                    "received_data": dict(request.data),
-                    "content_type": request.content_type
-                },
+            return APIResponse.validation_error(  # ← ЗАМІСТЬ api_response
+                message="Помилка валідації даних менеджера",
+                field_errors=serializer.errors,
                 meta={
                     "error_type": "VALIDATION_ERROR",
                     "debug_info": {
                         "parser_classes": [p.__name__ for p in self.parser_classes],
-                        "content_type": request.content_type,
-                        "data_keys": list(request.data.keys()) if hasattr(request.data, 'keys') else 'no_keys'
+                        "content_type": request.content_type
                     }
-                },
-                status_code=400
+                }
             )
 
         try:
             instance = serializer.save()
-            smart_cache_invalidation()
-
-            return api_response(
+            return APIResponse.success(  # ← ЗАМІСТЬ api_response
                 data=serializer.data,
+                message=f"✅ Менеджера {instance.user.username} успішно створено",
                 meta={
                     "created": True,
                     "manager_id": instance.id,
                     "creation_time": timezone.now(),
-                    "cache_cleared": True,
-                    "content_type_used": request.content_type
+                    "cache_cleared": True
                 },
-                message=f"✅ Менеджера {instance.user.username} успішно створено",
                 status_code=201
             )
         except Exception as e:
-            print(f"❌ Creation error: {str(e)}")
-            return api_response(
-                errors={
-                    "creation_error": f"Помилка створення менеджера: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(  # ← ЗАМІСТЬ api_response
+                message=f"Помилка створення менеджера: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
-                    "error_time": timezone.now(),
-                    "attempted_data": dict(request.data) if hasattr(request.data, 'items') else str(request.data)
-                },
-                status_code=500
+                    "error_time": timezone.now()
+                }
             )
 
     def update(self, request, *args, **kwargs):
-        """📝 Оновлення менеджера"""
+
+        """📝 Оновлення менеджера з data/meta навіть при помилках"""
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
+
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as e:
+            return APIResponse.validation_error(
+                message="Помилка при оновленні менеджера",
+                field_errors=e.detail,
+                meta={
+                    "manager_id": instance.id,
+                    "validation_time": timezone.now()
+                }
+            )
 
         try:
             old_data = {
@@ -3949,7 +4006,7 @@ class ManagerViewSet(viewsets.ModelViewSet):
             updated_instance = serializer.save()
             smart_cache_invalidation()
 
-            return api_response(
+            return APIResponse.success(
                 data=serializer.data,
                 meta={
                     "updated": True,
@@ -3962,11 +4019,10 @@ class ManagerViewSet(viewsets.ModelViewSet):
                 message=f"✅ Менеджера {updated_instance.user.username} успішно оновлено"
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "update_error": f"Помилка оновлення менеджера: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.error(
+                error_type=ErrorType.SYSTEM,
+                message=f"Помилка оновлення менеджера: {str(e)}",
+                details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "manager_id": instance.id
@@ -3985,55 +4041,36 @@ class ManagerViewSet(viewsets.ModelViewSet):
         ).count()
 
         if active_leads_count > 0:
-            return api_response(
-                errors={
-                    "deletion_blocked": f"Неможливо видалити менеджера з {active_leads_count} активними лідами",
-                    "active_leads": active_leads_count,
-                    "solution": "Спочатку переназначте або завершіть активні ліди"
-                },
+            return APIResponse.business_rule_error(  # ← ЗАМІСТЬ api_response
+                message=f"Неможливо видалити менеджера з {active_leads_count} активними лідами",
+                rule_name="MANAGER_DELETION_ACTIVE_LEADS",
+                suggested_actions=["Спочатку переназначте або завершіть активні ліди"],
                 meta={
                     "manager_id": instance.id,
                     "manager_username": instance.user.username,
-                    "check_time": timezone.now()
-                },
-                status_code=422
+                    "active_leads": active_leads_count
+                }
             )
 
         try:
-            manager_info = {
-                "id": instance.id,
-                "username": instance.user.username,
-                "email": instance.user.email,
-                "interface_type": instance.interface_type
-            }
-
-            # Видаляємо
-            instance.delete()
-            smart_cache_invalidation()
-
-            return api_response(
-                data={
-                    "deleted_manager": manager_info
-                },
+            # Успішне видалення
+            return APIResponse.success(  # ← ЗАМІСТЬ api_response
+                data={"deleted_manager": manager_info},
+                message=f"✅ Менеджера {manager_info['username']} успішно видалено",
                 meta={
                     "deleted": True,
                     "deletion_time": timezone.now(),
                     "cache_cleared": True
-                },
-                message=f"✅ Менеджера {manager_info['username']} успішно видалено",
-                status_code=200
+                }
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "deletion_error": f"Помилка видалення менеджера: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(  # ← ЗАМІСТЬ api_response
+                message=f"Помилка видалення менеджера: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "manager_id": instance.id
-                },
-                status_code=500
+                }
             )
 
     def retrieve(self, request, *args, **kwargs):
@@ -4092,7 +4129,7 @@ class ManagerViewSet(viewsets.ModelViewSet):
             'monthly_performance': monthly_stats
         }
 
-        return api_response(
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
             data=response_data,
             meta={
                 "manager_id": instance.id,
@@ -4112,12 +4149,10 @@ class CreateLeadView(APIView):
 
         serializer = LeadSerializer(data=request.data)
         if not serializer.is_valid():
-            return api_response(
-                errors={
-                    "validation_errors": serializer.errors,
-                    "error_type": "SERIALIZER_VALIDATION"
-                },
-                status_code=400
+            return APIResponse.validation_error(  # ← ЗАМІСТЬ api_response
+                message="Помилка валідації даних",
+                field_errors=serializer.errors,
+                details={"validation_type": "lead_serializer"}
             )
 
         order_number = serializer.validated_data.get('order_number')
@@ -4126,30 +4161,23 @@ class CreateLeadView(APIView):
         if order_number:
             existing = Lead.objects.filter(order_number=order_number).first()
             if existing:
-                print(f"🚫 ДУБЛІКАТ! Номер замовлення {order_number} вже є в ліді #{existing.id}")
-                return api_response(
-                    errors={
-                        "duplicate_error": {
-                            "type": "ORDER_NUMBER_EXISTS",
-                            "message": f"Номер замовлення {order_number} вже використовується",
-                            "existing_lead": {
-                                "id": existing.id,
-                                "full_name": existing.full_name,
-                                "phone": existing.phone,
-                                "created_at": existing.created_at,
-                                "status": existing.status,
-                                "assigned_to": existing.assigned_to.username if existing.assigned_to else None
-                            }
-                        }
+                return APIResponse.duplicate_error(  # ← ЗАМІСТЬ api_response
+                    resource="Лід",
+                    duplicate_field="номер замовлення",
+                    duplicate_value=order_number,
+                    existing_resource={
+                        "id": existing.id,
+                        "full_name": existing.full_name,
+                        "phone": existing.phone,
+                        "created_at": existing.created_at,
+                        "status": existing.status
                     },
                     meta={
                         "duplicate_check": {
                             "order_number": order_number,
-                            "check_time": timezone.now(),
-                            "existing_lead_id": existing.id
+                            "check_time": timezone.now()
                         }
-                    },
-                    status_code=409
+                    }
                 )
 
         # Створюємо лід
@@ -4175,37 +4203,26 @@ class CreateLeadView(APIView):
                 "source": getattr(lead, 'source', 'manual_creation')
             }
 
-            return api_response(
-                data={
-                    "lead": lead_data
-                },
+            return APIResponse.success(  # ← ЗАМІСТЬ api_response
+                data={"lead": lead_data},
+                message=f"✅ Лід #{lead.id} створено успішно для {lead.full_name}",
                 meta={
                     "created": True,
                     "creation_method": "manual_api",
                     "processing_time": timezone.now(),
-                    "cache_cleared": True,
-                    "lead_id": lead.id
+                    "cache_cleared": True
                 },
-                message=f"✅ Лід #{lead.id} створено успішно для {lead.full_name}",
                 status_code=201
             )
-
         except Exception as e:
-            print(f"❌ Помилка створення ліда: {str(e)}")
-            return api_response(
-                errors={
-                    "creation_error": {
-                        "type": "DATABASE_ERROR",
-                        "message": f"Не вдалося створити лід: {str(e)}",
-                        "details": str(e)
-                    }
-                },
+            return APIResponse.system_error(  # ← ЗАМІСТЬ api_response
+                message=f"Не вдалося створити лід: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
-                    "error_time": timezone.now(),
-                    "attempted_data": serializer.validated_data
-                },
-                status_code=500
+                    "error_time": timezone.now()
+                }
             )
+
 
 
 @api_view(['POST'])
@@ -4277,7 +4294,6 @@ def check_lead_duplicate(request):
     )
 
 
-
 class ClientInteractionViewSet(viewsets.ModelViewSet):
     serializer_class = ClientInteractionSerializer
     permission_classes = [IsAuthenticated]
@@ -4302,7 +4318,7 @@ class ClientInteractionViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(page, many=True)
             paginated_response = self.get_paginated_response(serializer.data)
 
-            return api_response(
+            return APIResponse.success(  # ← ЗАМІСТЬ api_response
                 data=paginated_response.data['results'],
                 meta={
                     "pagination": {
@@ -4315,7 +4331,7 @@ class ClientInteractionViewSet(viewsets.ModelViewSet):
             )
 
         serializer = self.get_serializer(queryset, many=True)
-        return api_response(
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
             data=serializer.data,
             meta={
                 "total_interactions": queryset.count(),
@@ -4335,15 +4351,15 @@ class ClientInteractionViewSet(viewsets.ModelViewSet):
         client.last_contact_date = timezone.now()
         client.save()
 
-        return api_response(
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
             data=serializer.data,
+            message="Взаємодію успішно створено",
             meta={
                 "created": True,
                 "interaction_id": instance.id,
                 "client_updated": True
             },
-            message="Взаємодію успішно створено",
-            status_code=status.HTTP_201_CREATED
+            status_code=201
         )
 
 
@@ -4386,7 +4402,7 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(queryset, many=True)
 
-        return api_response(
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
             data=serializer.data,
             meta={
                 "total_tasks": queryset.count(),
@@ -4407,15 +4423,15 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
 
         instance = serializer.save()
 
-        return api_response(
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
             data=serializer.data,
+            message="Задачу успішно створено",
             meta={
                 "created": True,
                 "task_id": instance.id,
                 "due_in_hours": (instance.due_date - timezone.now()).total_seconds() / 3600
             },
-            message="Задачу успішно створено",
-            status_code=status.HTTP_201_CREATED
+            status_code=201
         )
 
     @action(detail=False, methods=['get'], url_path='my-tasks')
@@ -4439,10 +4455,8 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
             for task in tasks
         ]
 
-        return api_response(
-            data={
-                "tasks": tasks_data
-            },
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
+            data={"tasks": tasks_data},
             meta={
                 "user": request.user.username,
                 "total_my_tasks": len(tasks_data),
@@ -4470,10 +4484,8 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
             for task in overdue
         ]
 
-        return api_response(
-            data={
-                "overdue_tasks": overdue_data
-            },
+        return APIResponse.success(  # ← ЗАМІСТЬ api_response
+            data={"overdue_tasks": overdue_data},
             meta={
                 "total_overdue": len(overdue_data),
                 "most_overdue_days": max((task['days_overdue'] for task in overdue_data), default=0)

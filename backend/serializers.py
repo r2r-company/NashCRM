@@ -3,6 +3,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import Lead, Client, CustomUser, LeadFile, ClientInteraction, ClientTask
@@ -70,7 +71,7 @@ class LeadSerializer(serializers.ModelSerializer):
         return ""
 
     def validate_status(self, value):
-        """🔥 ВАЛІДАЦІЯ СТАТУСУ ПРИ ОНОВЛЕННІ"""
+        """🔥 ВИПРАВЛЕНА ВАЛІДАЦІЯ СТАТУСУ - помічаємо помилку для view"""
         # Тільки для існуючих лідів (update)
         if self.instance:
             current_status = self.instance.status
@@ -79,7 +80,7 @@ class LeadSerializer(serializers.ModelSerializer):
             if current_status == value:
                 return value
 
-            print(f"🔍 ВАЛІДАЦІЯ: {current_status} → {value}")
+            print(f"🔍 ВАЛІДАЦІЯ СТАТУСУ: {current_status} → {value}")
 
             # Перевіряємо чи можливий перехід
             can_transition, reason = LeadStatusValidator.can_transition(
@@ -89,35 +90,17 @@ class LeadSerializer(serializers.ModelSerializer):
             if not can_transition:
                 print(f"❌ ВАЛІДАЦІЯ НЕ ПРОЙШЛА: {reason}")
 
-                # 🔥 ДЕТАЛЬНЕ ПОЯСНЕННЯ ДЛЯ КОРИСТУВАЧА
-                available_transitions = LeadStatusValidator.get_allowed_transitions(current_status, self.instance)
+                # 🔥 СПЕЦІАЛЬНИЙ МАРКЕР для view щоб він зрозумів що це помилка переходу статусу
+                # Зберігаємо інформацію в контексті серіалізатора
+                self._status_transition_error = {
+                    'current_status': current_status,
+                    'attempted_status': value,
+                    'reason': reason,
+                    'instance': self.instance
+                }
 
-                # Спеціальне пояснення для конкретних випадків
-                detailed_explanation = self._get_detailed_status_explanation(current_status, value, self.instance)
-
-                raise serializers.ValidationError({
-                    'error_type': 'STATUS_TRANSITION_BLOCKED',
-                    'message': reason,
-                    'detailed_explanation': detailed_explanation,
-                    'current_status': {
-                        'code': current_status,
-                        'name': LeadStatusValidator.STATUS_NAMES.get(current_status)
-                    },
-                    'attempted_status': {
-                        'code': value,
-                        'name': LeadStatusValidator.STATUS_NAMES.get(value)
-                    },
-                    'available_statuses': [
-                        {
-                            'code': status,
-                            'name': LeadStatusValidator.STATUS_NAMES.get(status),
-                            'description': LeadStatusValidator._get_transition_description(current_status, status)
-                        }
-                        for status in available_transitions
-                    ],
-                    'required_action': LeadStatusValidator.get_next_required_action(self.instance),
-                    'business_rules': self._get_business_rules_explanation(current_status, value)
-                })
+                # 🔥 КИДАЄМО ПРОСТУ ТЕКСТОВУ ПОМИЛКУ - view сам оформить
+                raise serializers.ValidationError("STATUS_TRANSITION_ERROR")
 
             print(f"✅ ВАЛІДАЦІЯ ПРОЙШЛА: {reason}")
 
