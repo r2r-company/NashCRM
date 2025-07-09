@@ -8,6 +8,7 @@ from django.shortcuts import render
 from django.utils import timezone  # ← ЦЕЙ РЯДОК ВІРОГІДНО Є
 from django.utils.dateparse import parse_date
 from django.utils.timezone import now
+from jsonschema.exceptions import ValidationError
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -30,6 +31,7 @@ from backend.services.lead_creation_service import create_lead_with_logic
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 # 🚀 УТИЛІТА ДЛЯ РОЗУМНОГО ОЧИЩЕННЯ КЕШУ
+from backend.utils.api_responses import APIResponse, LeadStatusResponse, StatusChangeError
 from backend.validators.lead_status_validator import LeadStatusValidator, validate_lead_status_change
 
 
@@ -213,21 +215,20 @@ def home(request):
 
 
 class MyTokenObtainPairView(TokenObtainPairView):
-    """🔐 Отримання JWT токенів з розширеною інформацією"""
+    """🔐 Отримання JWT токенів"""
     serializer_class = MyTokenObtainPairSerializer
-    permission_classes = [AllowAny]  # 🔥 ДОДАЙТЕ ЦЮ СТРОКУ!
-
+    permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
-        # Викликаємо батьківський метод
         response = super().post(request, *args, **kwargs)
 
-        # Якщо помилка авторизації - повертаємо в стандартному форматі
         if response.status_code != 200:
-            return api_response(
-                errors={
+            return APIResponse.error(
+                error_type=ErrorType.AUTHENTICATION,
+                message="Невірні облікові дані",
+                details={
                     "authentication_error": "Невірні облікові дані",
-                    "details": response.data
+                    "login_details": response.data
                 },
                 meta={
                     "login_attempt_time": timezone.now(),
@@ -238,8 +239,6 @@ class MyTokenObtainPairView(TokenObtainPairView):
             )
 
         raw_data = response.data
-
-        # Розділяємо токени та інформацію про користувача
         tokens = {
             "access": raw_data.get("access"),
             "refresh": raw_data.get("refresh"),
@@ -250,60 +249,57 @@ class MyTokenObtainPairView(TokenObtainPairView):
             if k not in ["access", "refresh"]
         }
 
-        # 🚀 СТАНДАРТИЗОВАНИЙ ФОРМАТ
-        response.data = api_response(
+        response.data = APIResponse.success(
             data={
                 "tokens": tokens,
                 "user": user_info
             },
+            message=f"✅ Успішна авторизація користувача {user_info.get('username')}",
             meta={
                 "login_time": timezone.now(),
                 "token_type": "JWT",
-                "access_token_expires_in": 3600,  # 1 година
-                "refresh_token_expires_in": 86400,  # 24 години
+                "access_token_expires_in": 3600,
+                "refresh_token_expires_in": 86400,
                 "authentication_method": "jwt_pair",
                 "ip_address": request.META.get('REMOTE_ADDR'),
                 "session_info": {
                     "session_key": request.session.session_key,
                     "is_new_session": request.session.is_empty()
                 }
-            },
-            message=f"✅ Успішна авторизація користувача {user_info.get('username')}"
+            }
         ).data
 
         return response
 
+
+
 class LoginView(APIView):
-    """🔐 Стандартна авторизація з детальною відповіддю"""
+    """🔐 Стандартна авторизація"""
     permission_classes = [AllowAny]
 
     def post(self, request):
         username = request.data.get("username")
         password = request.data.get("password")
 
-        # Валідація вхідних даних
         if not username or not password:
-            return api_response(
-                errors={
-                    "validation_error": "Логін та пароль обов'язкові",
-                    "missing_fields": {
-                        "username": not username,
-                        "password": not password
-                    }
+            return APIResponse.validation_error(
+                message="Логін та пароль обов'язкові",
+                field_errors={
+                    "username": ["Це поле обов'язкове"] if not username else [],
+                    "password": ["Це поле обов'язкове"] if not password else []
                 },
                 meta={
                     "login_attempt_time": timezone.now(),
                     "ip_address": request.META.get('REMOTE_ADDR')
-                },
-                status_code=400
+                }
             )
 
-        # Спроба авторизації
         user = authenticate(username=username, password=password)
         if user is None:
-            return api_response(
-                errors={
-                    "authentication_failed": "Невірний логін або пароль",
+            return APIResponse.error(
+                error_type=ErrorType.AUTHENTICATION,
+                message="Невірний логін або пароль",
+                details={
                     "attempted_username": username,
                     "security_note": "Спроба авторизації зафіксована"
                 },
@@ -328,11 +324,9 @@ class LoginView(APIView):
             interface_type = "default"
             avatar_url = None
 
-        # Групи та дозволи
         groups = list(user.groups.values_list("name", flat=True))
         permissions = list(user.user_permissions.values_list("codename", flat=True))
 
-        # Формуємо дані користувача
         user_data = {
             "id": user.id,
             "username": user.username,
@@ -351,21 +345,21 @@ class LoginView(APIView):
             "date_joined": user.date_joined,
         }
 
-        # Токени
         tokens_data = {
             "access": str(refresh.access_token),
             "refresh": str(refresh),
             "token_type": "Bearer"
         }
 
-        return api_response(
+        return APIResponse.success(
             data={
                 "tokens": tokens_data,
                 "user": user_data
             },
+            message=f"✅ Ласкаво просимо, {user.first_name or user.username}!",
             meta={
                 "login_time": timezone.now(),
-                "session_expires_in": 86400,  # 24 години
+                "session_expires_in": 86400,
                 "authentication_method": "username_password",
                 "ip_address": request.META.get('REMOTE_ADDR'),
                 "user_agent": request.META.get('HTTP_USER_AGENT', '')[:100],
@@ -378,8 +372,7 @@ class LoginView(APIView):
                     "login_count": getattr(user, 'login_count', 0) + 1,
                     "account_status": "active" if user.is_active else "inactive"
                 }
-            },
-            message=f"✅ Ласкаво просимо, {user.first_name or user.username}!"
+            }
         )
 
 
@@ -428,7 +421,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                 count=Count('id')
             ).order_by('-count')
 
-            return api_response(
+            return APIResponse.success(
                 data=paginated_response.data['results'],
                 meta={
                     "pagination": {
@@ -464,7 +457,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             avg_ltv=Avg('total_spent')
         )
 
-        return api_response(
+        return APIResponse.success(
             data=serializer.data,
             meta={
                 "total_clients": len(serializer.data),
@@ -481,7 +474,15 @@ class ClientViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         """➕ Створення нового клієнта"""
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as e:
+            return APIResponse.validation_error(
+                message="Помилка валідації даних клієнта",
+                field_errors=e.detail if hasattr(e, 'detail') else {"general": [str(e)]},
+                details={"validation_type": "client_serializer"}
+            )
 
         # Перевіряємо дублікати по телефону
         phone = serializer.validated_data.get('phone')
@@ -490,15 +491,16 @@ class ClientViewSet(viewsets.ModelViewSet):
             existing_client = Client.objects.filter(phone=normalized_phone).first()
 
             if existing_client:
-                return api_response(
-                    errors={
-                        "duplicate_phone": "Клієнт з таким номером телефону вже існує",
-                        "existing_client": {
-                            "id": existing_client.id,
-                            "name": existing_client.full_name,
-                            "phone": existing_client.phone,
-                            "created_at": existing_client.created_at
-                        }
+                return APIResponse.duplicate_error(
+                    resource="Клієнт",
+                    duplicate_field="телефон",
+                    duplicate_value=phone,
+                    existing_resource={
+                        "id": existing_client.id,
+                        "name": existing_client.full_name,
+                        "phone": existing_client.phone,
+                        "created_at": existing_client.created_at,
+                        "temperature": getattr(existing_client, 'temperature', 'cold')
                     },
                     meta={
                         "duplicate_check": {
@@ -506,16 +508,16 @@ class ClientViewSet(viewsets.ModelViewSet):
                             "normalized_phone": normalized_phone,
                             "check_time": timezone.now()
                         }
-                    },
-                    status_code=409
+                    }
                 )
 
         try:
             instance = serializer.save()
             smart_cache_invalidation()
 
-            return api_response(
+            return APIResponse.success(
                 data=serializer.data,
+                message=f"✅ Клієнта {instance.full_name} успішно створено",
                 meta={
                     "created": True,
                     "client_id": instance.id,
@@ -524,20 +526,16 @@ class ClientViewSet(viewsets.ModelViewSet):
                     "initial_temperature": getattr(instance, 'temperature', 'cold'),
                     "initial_segment": getattr(instance, 'akb_segment', 'new')
                 },
-                message=f"✅ Клієнта {instance.full_name} успішно створено",
                 status_code=201
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "creation_error": f"Помилка створення клієнта: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(
+                message=f"Помилка створення клієнта: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "attempted_data": request.data
-                },
-                status_code=500
+                }
             )
 
     def update(self, request, *args, **kwargs):
@@ -553,7 +551,15 @@ class ClientViewSet(viewsets.ModelViewSet):
         }
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
+
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as e:
+            return APIResponse.validation_error(
+                message="Помилка валідації даних клієнта",
+                field_errors=e.detail if hasattr(e, 'detail') else {"general": [str(e)]},
+                details={"validation_type": "client_update_serializer"}
+            )
 
         try:
             updated_instance = serializer.save()
@@ -580,8 +586,9 @@ class ClientViewSet(viewsets.ModelViewSet):
                     'new': new_assigned
                 }
 
-            return api_response(
+            return APIResponse.success(
                 data=serializer.data,
+                message=f"✅ Клієнта {updated_instance.full_name} успішно оновлено",
                 meta={
                     "updated": True,
                     "client_id": updated_instance.id,
@@ -590,20 +597,16 @@ class ClientViewSet(viewsets.ModelViewSet):
                     "partial_update": partial,
                     "changes_made": changes,
                     "total_changes": len(changes)
-                },
-                message=f"✅ Клієнта {updated_instance.full_name} успішно оновлено"
+                }
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "update_error": f"Помилка оновлення клієнта: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(
+                message=f"Помилка оновлення клієнта: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "client_id": instance.id
-                },
-                status_code=500
+                }
             )
 
     def retrieve(self, request, *args, **kwargs):
@@ -611,7 +614,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
 
-        # Додаємо розширену інформацією
+        # Додаємо розширену інформацію
         extended_data = serializer.data
 
         # Статистика по лідах клієнта
@@ -672,7 +675,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             }
         }
 
-        return api_response(
+        return APIResponse.success(
             data=extended_data,
             meta={
                 "client_id": instance.id,
@@ -693,9 +696,17 @@ class ClientViewSet(viewsets.ModelViewSet):
         )
 
         if active_leads.exists():
-            return api_response(
-                errors={
-                    "deletion_blocked": f"Неможливо видалити клієнта з активними лідами",
+            return APIResponse.business_rule_error(
+                message=f"Неможливо видалити клієнта з активними лідами",
+                rule_name="CLIENT_DELETION_ACTIVE_LEADS",
+                suggested_actions=[
+                    "Спочатку завершіть або скасуйте активні ліди",
+                    "Переназначте ліди іншому клієнту",
+                    "Зверніться до адміністратора"
+                ],
+                meta={
+                    "client_id": instance.id,
+                    "client_name": instance.full_name,
                     "active_leads_count": active_leads.count(),
                     "active_leads": [
                         {
@@ -705,14 +716,8 @@ class ClientViewSet(viewsets.ModelViewSet):
                         }
                         for lead in active_leads[:5]  # Показуємо перші 5
                     ],
-                    "solution": "Спочатку завершіть або скасуйте активні ліди"
-                },
-                meta={
-                    "client_id": instance.id,
-                    "client_name": instance.full_name,
                     "check_time": timezone.now()
-                },
-                status_code=422
+                }
             )
 
         try:
@@ -728,41 +733,35 @@ class ClientViewSet(viewsets.ModelViewSet):
             instance.delete()
             smart_cache_invalidation()
 
-            return api_response(
-                data={
-                    "deleted_client": client_info
-                },
+            return APIResponse.success(
+                data={"deleted_client": client_info},
+                message=f"✅ Клієнта {client_info['name']} успішно видалено",
                 meta={
                     "deleted": True,
                     "deletion_time": timezone.now(),
                     "cache_cleared": True,
                     "cleanup_performed": True
-                },
-                message=f"✅ Клієнта {client_info['name']} успішно видалено",
-                status_code=200
+                }
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "deletion_error": f"Помилка видалення клієнта: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(
+                message=f"Помилка видалення клієнта: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "client_id": instance.id
-                },
-                status_code=500
+                }
             )
 
     @action(detail=False, methods=['get'], url_path='leads/(?P<client_id>[^/.]+)')
     def leads(self, request, client_id=None):
-        """GET /api/clients/leads/{id}/"""
+        """GET /api/clients/leads/{id}/ - Ліди клієнта"""
         try:
             client = Client.objects.get(id=client_id)
         except Client.DoesNotExist:
-            return api_response(
-                errors={'client': 'Клієнт не знайдено'},
-                status_code=404
+            return APIResponse.not_found_error(
+                resource="Клієнт",
+                resource_id=client_id
             )
 
         cache_key = f"client_leads_{client.id}"
@@ -782,7 +781,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             ]
             cache.set(cache_key, cached_result, 30)
 
-        return api_response(
+        return APIResponse.success(
             data={
                 'client': {
                     'id': client.id,
@@ -795,19 +794,20 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'total_leads': len(cached_result),
                 'cache_hit': cached_result == cache.get(cache_key),
                 'cache_expires_in': 30,
-                'data_includes': ['lead_basic_info', 'status', 'price', 'assignment']
+                'data_includes': ['lead_basic_info', 'status', 'price', 'assignment'],
+                'generated_at': timezone.now()
             }
         )
 
     @action(detail=False, methods=['get'], url_path='payments/(?P<client_id>[^/.]+)')
     def payments(self, request, client_id=None):
-        """GET /api/clients/payments/{id}/"""
+        """GET /api/clients/payments/{id}/ - Платежі клієнта"""
         try:
             client = Client.objects.get(id=client_id)
         except Client.DoesNotExist:
-            return api_response(
-                errors={'client': 'Клієнт не знайдено'},
-                status_code=404
+            return APIResponse.not_found_error(
+                resource="Клієнт",
+                resource_id=client_id
             )
 
         cache_key = f"client_payments_{client.id}"
@@ -833,7 +833,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         total_received = sum(p['amount'] for p in cached_result if p['type'] == 'received')
         total_expected = sum(p['amount'] for p in cached_result if p['type'] == 'expected')
 
-        return api_response(
+        return APIResponse.success(
             data={
                 'client': {
                     'id': client.id,
@@ -857,15 +857,21 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='temperature-stats')
     def temperature_stats(self, request):
-        """GET /api/clients/temperature-stats/"""
+        """GET /api/clients/temperature-stats/ - Статистика по температурі"""
         cache_key = "temperature_stats"
         cached_result = cache.get(cache_key)
 
         if cached_result is None:
             if not hasattr(Client, 'temperature'):
-                return api_response(
-                    errors={'temperature': 'Поле temperature не існує в моделі Client'},
-                    status_code=400
+                return APIResponse.validation_error(
+                    message="Поле temperature не існує в моделі Client",
+                    field_errors={
+                        "temperature": ["Поле не знайдено в моделі"]
+                    },
+                    details={
+                        "model": "Client",
+                        "missing_field": "temperature"
+                    }
                 )
 
             stats = Client.objects.values('temperature').annotate(
@@ -888,7 +894,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             cache.set(cache_key, result, 300)
             cached_result = result
 
-        return api_response(
+        return APIResponse.success(
             data=cached_result,
             meta={
                 'analysis_type': 'temperature_segmentation',
@@ -906,7 +912,7 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='akb-segments')
     def akb_segments(self, request):
-        """GET /api/clients/akb-segments/"""
+        """GET /api/clients/akb-segments/ - AKB сегменти"""
         cache_key = "akb_segments_stats"
         cached_result = cache.get(cache_key)
 
@@ -926,7 +932,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         total_akb_clients = sum(s['count'] for s in cached_result)
         total_akb_revenue = sum(float(s['total_revenue'] or 0) for s in cached_result)
 
-        return api_response(
+        return APIResponse.success(
             data={
                 'segments': [
                     {
@@ -952,60 +958,9 @@ class ClientViewSet(viewsets.ModelViewSet):
             }
         )
 
-    @action(detail=False, methods=['get'], url_path='rfm-analysis')
-    def rfm_analysis(self, request):
-        """GET /api/clients/rfm-analysis/"""
-        cache_key = "rfm_analysis"
-        cached_result = cache.get(cache_key)
-
-        if cached_result is None:
-            top_clients = Client.objects.filter(
-                total_orders__gt=0
-            ).order_by('-total_spent')[:10]
-
-            rfm_distribution = {}
-            for client in Client.objects.filter(rfm_score__isnull=False):
-                score = client.rfm_score
-                if score not in rfm_distribution:
-                    rfm_distribution[score] = 0
-                rfm_distribution[score] += 1
-
-            result = {
-                'top_clients': [
-                    {
-                        'id': c.id,
-                        'name': c.full_name,
-                        'phone': c.phone,
-                        'total_spent': float(getattr(c, 'total_spent', 0) or 0),
-                        'rfm_score': getattr(c, 'rfm_score', ''),
-                        'segment': getattr(c, 'akb_segment', ''),
-                        'last_purchase': getattr(c, 'last_purchase_date', None)
-                    }
-                    for c in top_clients
-                ],
-                'rfm_distribution': rfm_distribution
-            }
-
-            cache.set(cache_key, result, 300)
-            cached_result = result
-
-        return api_response(
-            data=cached_result,
-            meta={
-                'analysis_type': 'RFM',
-                'metrics': {
-                    'top_clients_count': len(cached_result['top_clients']),
-                    'rfm_scores_analyzed': len(cached_result['rfm_distribution']),
-                    'total_value_top_clients': sum(c['total_spent'] for c in cached_result['top_clients'])
-                },
-                'cache_expires_in': 300,
-                'methodology': 'Recency, Frequency, Monetary analysis'
-            }
-        )
-
     @action(detail=False, methods=['get'], url_path='churn-risk')
     def churn_risk(self, request):
-        """GET /api/clients/churn-risk/"""
+        """GET /api/clients/churn-risk/ - Клієнти з ризиком відтоку"""
         cache_key = "churn_risk_clients"
         cached_result = cache.get(cache_key)
 
@@ -1042,7 +997,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             cache.set(cache_key, result, 300)
             cached_result = result
 
-        return api_response(
+        return APIResponse.success(
             data=cached_result,
             meta={
                 'analysis_type': 'churn_risk',
@@ -1057,6 +1012,121 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'generated_at': timezone.now()
             }
         )
+
+    @action(detail=False, methods=['post'], url_path='update-temperature/(?P<client_id>[^/.]+)')
+    def update_temperature(self, request, client_id=None):
+        """POST /api/clients/update-temperature/{id}/ - Оновлення температури"""
+        try:
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            return APIResponse.not_found_error(
+                resource="Клієнт",
+                resource_id=client_id
+            )
+
+        new_temperature = request.data.get('temperature')
+        update_reason = request.data.get('reason', 'Ручне оновлення')
+
+        if not hasattr(client, 'temperature'):
+            return APIResponse.validation_error(
+                message="Поле temperature не існує в моделі Client",
+                field_errors={
+                    "temperature": ["Поле не знайдено в моделі"]
+                }
+            )
+
+        if not hasattr(Client, 'TEMPERATURE_CHOICES'):
+            return APIResponse.validation_error(
+                message="TEMPERATURE_CHOICES не визначені",
+                field_errors={
+                    "choices": ["Варіанти температури не знайдено"]
+                }
+            )
+
+        if new_temperature not in dict(Client.TEMPERATURE_CHOICES):
+            available_options = [
+                {'code': code, 'label': label}
+                for code, label in Client.TEMPERATURE_CHOICES
+            ]
+            return APIResponse.validation_error(
+                message="Неправильна температура",
+                field_errors={
+                    "temperature": [f"Дозволені значення: {', '.join([opt['code'] for opt in available_options])}"]
+                },
+                details={
+                    "provided_value": new_temperature,
+                    "available_options": available_options
+                }
+            )
+
+        old_temperature = client.temperature
+
+        # Перевіримо чи це справді зміна
+        if old_temperature == new_temperature:
+            return APIResponse.success(
+                data={
+                    'client': {
+                        'id': client.id,
+                        'name': client.full_name,
+                        'phone': client.phone,
+                        'temperature': client.temperature
+                    }
+                },
+                message=f'Температура вже встановлена як {old_temperature}',
+                meta={
+                    'no_change': True,
+                    'current_temperature': old_temperature,
+                    'check_time': timezone.now()
+                }
+            )
+
+        try:
+            client.temperature = new_temperature
+            client.save()
+
+            smart_cache_invalidation()
+
+            # Логування зміни
+            temperature_change_log = {
+                'client_id': client.id,
+                'old_temperature': old_temperature,
+                'new_temperature': new_temperature,
+                'changed_by': request.user.username,
+                'change_time': timezone.now(),
+                'reason': update_reason
+            }
+
+            return APIResponse.success(
+                data={
+                    'client': {
+                        'id': client.id,
+                        'name': client.full_name,
+                        'phone': client.phone,
+                        'old_temperature': old_temperature,
+                        'new_temperature': new_temperature,
+                        'temperature_label': dict(Client.TEMPERATURE_CHOICES).get(new_temperature, new_temperature)
+                    },
+                    'change_log': temperature_change_log
+                },
+                message=f'✅ Температуру змінено: {old_temperature} → {new_temperature}',
+                meta={
+                    'updated': True,
+                    'update_time': timezone.now(),
+                    'cache_cleared': True,
+                    'changed_by': request.user.username,
+                    'business_impact': self._get_temperature_impact(old_temperature, new_temperature)
+                }
+            )
+        except Exception as e:
+            return APIResponse.system_error(
+                message=f'Помилка оновлення температури: {str(e)}',
+                exception_details={"exception": str(e)},
+                meta={
+                    'error_time': timezone.now(),
+                    'client_id': client.id,
+                    'attempted_change': f'{old_temperature} → {new_temperature}'
+                }
+            )
 
     def _calculate_churn_priority(self, client):
         """Розрахунок пріоритету для чурн-ризику"""
@@ -1089,323 +1159,6 @@ class ClientViewSet(viewsets.ModelViewSet):
 
         return min(score, 100)  # Максимум 100
 
-    @action(detail=False, methods=['get'], url_path='hot-leads')
-    def hot_leads(self, request):
-        """GET /api/clients/hot-leads/"""
-        cache_key = "hot_leads_clients"
-        cached_result = cache.get(cache_key)
-
-        if cached_result is None:
-            if hasattr(Client, 'temperature'):
-                hot_clients = Client.objects.filter(
-                    temperature='hot'
-                ).order_by('-created_at')[:20]
-            else:
-                hot_clients = Client.objects.order_by('-created_at')[:20]
-
-            result = {
-                'hot_leads': [
-                    {
-                        'id': c.id,
-                        'name': c.full_name,
-                        'phone': c.phone,
-                        'assigned_to': c.assigned_to.username if c.assigned_to else None,
-                        'created_at': c.created_at,
-                        'leads_count': Lead.objects.filter(phone=c.phone).count(),
-                        'recommendation': getattr(c, 'next_contact_recommendation', 'Зв\'язатися з клієнтом'),
-                        'urgency_level': self._calculate_urgency(c)
-                    }
-                    for c in hot_clients
-                ]
-            }
-
-            # Сортуємо по терміновості
-            result['hot_leads'].sort(key=lambda x: x['urgency_level'], reverse=True)
-            cache.set(cache_key, result, 300)
-            cached_result = result
-
-        return api_response(
-            data=cached_result,
-            meta={
-                'analysis_type': 'hot_leads',
-                'urgency_metrics': {
-                    'hot_leads_count': len(cached_result['hot_leads']),
-                    'unassigned_count': len([l for l in cached_result['hot_leads'] if not l['assigned_to']]),
-                    'critical_urgency': len([l for l in cached_result['hot_leads'] if l['urgency_level'] > 80]),
-                    'avg_leads_per_client': sum(l['leads_count'] for l in cached_result['hot_leads']) / len(
-                        cached_result['hot_leads']) if cached_result['hot_leads'] else 0
-                },
-                'temperature_filter': 'hot',
-                'cache_expires_in': 300,
-                'priority': 'urgent_contact_required',
-                'generated_at': timezone.now()
-            }
-        )
-
-    def _calculate_urgency(self, client):
-        """Розрахунок рівня терміновості для гарячих лідів"""
-        urgency = 50  # Базовий рівень
-
-        # Якщо не призначений менеджер
-        if not client.assigned_to:
-            urgency += 30
-
-        # Кількість лідів
-        leads_count = Lead.objects.filter(phone=client.phone).count()
-        if leads_count > 3:
-            urgency += 20
-        elif leads_count > 1:
-            urgency += 10
-
-        # Недавність створення
-        hours_since_created = (timezone.now() - client.created_at).total_seconds() / 3600
-        if hours_since_created < 24:
-            urgency += 20
-        elif hours_since_created < 72:
-            urgency += 10
-
-        return min(urgency, 100)
-
-    @action(detail=False, methods=['get'], url_path='journey/(?P<client_id>[^/.]+)')
-    def client_journey(self, request, client_id=None):
-        """GET /api/clients/journey/{id}/"""
-        try:
-            client = Client.objects.get(id=client_id)
-        except Client.DoesNotExist:
-            return api_response(
-                errors={'client': 'Клієнт не знайдено'},
-                status_code=404
-            )
-
-        # Всі ліди клієнта
-        leads = Lead.objects.filter(phone=client.phone).order_by('created_at')
-
-        # Взаємодії
-        try:
-            interactions = ClientInteraction.objects.filter(
-                client=client
-            ).order_by('created_at')
-        except:
-            interactions = []
-
-        # Платежі
-        payments = LeadPaymentOperation.objects.filter(
-            lead__phone=client.phone
-        ).order_by('created_at')
-
-        # Хронологія
-        timeline = []
-
-        for lead in leads:
-            timeline.append({
-                'type': 'lead',
-                'date': lead.created_at,
-                'title': f'Створено лід: {lead.full_name}',
-                'details': {
-                    'lead_id': lead.id,
-                    'status': lead.status,
-                    'price': float(lead.price or 0),
-                    'source': getattr(lead, 'source', 'Невідомо'),
-                    'assigned_to': lead.assigned_to.username if lead.assigned_to else None
-                }
-            })
-
-        for interaction in interactions:
-            timeline.append({
-                'type': 'interaction',
-                'date': interaction.created_at,
-                'title': f'{interaction.get_interaction_type_display()}: {interaction.subject}',
-                'details': {
-                    'interaction_id': interaction.id,
-                    'outcome': getattr(interaction, 'outcome', ''),
-                    'description': getattr(interaction, 'description', ''),
-                    'created_by': interaction.created_by.username if hasattr(interaction,
-                                                                             'created_by') and interaction.created_by else None
-                }
-            })
-
-        for payment in payments:
-            timeline.append({
-                'type': 'payment',
-                'date': payment.created_at,
-                'title': f'Платіж: {payment.amount} грн',
-                'details': {
-                    'payment_id': payment.id,
-                    'lead_id': payment.lead_id,
-                    'type': payment.operation_type,
-                    'amount': float(payment.amount),
-                    'comment': payment.comment
-                }
-            })
-
-        timeline.sort(key=lambda x: x['date'])
-
-        # Аналітика подорожі
-        journey_analytics = {
-            'customer_lifecycle': {
-                'days_as_customer': (timezone.now() - client.created_at).days,
-                'first_interaction': min([item['date'] for item in timeline]) if timeline else None,
-                'last_interaction': max([item['date'] for item in timeline]) if timeline else None,
-                'engagement_frequency': len(timeline) / max((timezone.now() - client.created_at).days, 1)
-            },
-            'touchpoints': {
-                'total_touchpoints': len(timeline),
-                'leads_created': len([t for t in timeline if t['type'] == 'lead']),
-                'interactions_count': len([t for t in timeline if t['type'] == 'interaction']),
-                'payments_count': len([t for t in timeline if t['type'] == 'payment'])
-            },
-            'financial_journey': {
-                'total_payments': sum([float(t['details']['amount']) for t in timeline if t['type'] == 'payment']),
-                'avg_payment': sum([float(t['details']['amount']) for t in timeline if t['type'] == 'payment']) / len(
-                    [t for t in timeline if t['type'] == 'payment']) if [t for t in timeline if
-                                                                         t['type'] == 'payment'] else 0
-            }
-        }
-
-        return api_response(
-            data={
-                'client': {
-                    'id': client.id,
-                    'name': client.full_name,
-                    'phone': client.phone,
-                    'temperature': getattr(client, 'temperature', 'cold'),
-                    'akb_segment': getattr(client, 'akb_segment', 'new'),
-                    'total_spent': float(getattr(client, 'total_spent', 0) or 0),
-                    'rfm_score': getattr(client, 'rfm_score', ''),
-                    'created_at': client.created_at
-                },
-                'timeline': timeline,
-                'summary': {
-                    'total_leads': leads.count(),
-                    'total_interactions': len(interactions),
-                    'total_payments': payments.count(),
-                    'customer_since': getattr(client, 'first_purchase_date', client.created_at),
-                    'ltv': float(getattr(client, 'customer_lifetime_value', 0) or 0)
-                },
-                'analytics': journey_analytics
-            },
-            meta={
-                'journey_events': len(timeline),
-                'client_id': client.id,
-                'analysis_type': 'customer_journey',
-                'data_includes': ['timeline', 'summary', 'lifecycle_analytics'],
-                'generated_at': timezone.now(),
-                'comprehensive_analysis': True
-            }
-        )
-
-    @action(detail=False, methods=['post'], url_path='update-temperature/(?P<client_id>[^/.]+)')
-    def update_temperature(self, request, client_id=None):
-        """POST /api/clients/update-temperature/{id}/"""
-        try:
-            client = Client.objects.get(id=client_id)
-        except Client.DoesNotExist:
-            return api_response(
-                errors={'client': 'Клієнт не знайдено'},
-                status_code=404
-            )
-
-        new_temperature = request.data.get('temperature')
-        update_reason = request.data.get('reason', 'Ручне оновлення')
-
-        if not hasattr(client, 'temperature'):
-            return api_response(
-                errors={'temperature': 'Поле temperature не існує в моделі Client'},
-                status_code=400
-            )
-
-        if not hasattr(Client, 'TEMPERATURE_CHOICES'):
-            return api_response(
-                errors={'choices': 'TEMPERATURE_CHOICES не визначені'},
-                status_code=400
-            )
-
-        if new_temperature not in dict(Client.TEMPERATURE_CHOICES):
-            available_options = [
-                {'code': code, 'label': label}
-                for code, label in Client.TEMPERATURE_CHOICES
-            ]
-            return api_response(
-                errors={
-                    'temperature': 'Неправильна температура',
-                    'provided_value': new_temperature,
-                    'available_options': available_options
-                },
-                status_code=400
-            )
-
-        old_temperature = client.temperature
-
-        # Перевіримо чи це справді зміна
-        if old_temperature == new_temperature:
-            return api_response(
-                data={
-                    'client': {
-                        'id': client.id,
-                        'name': client.full_name,
-                        'phone': client.phone,
-                        'temperature': client.temperature
-                    }
-                },
-                meta={
-                    'no_change': True,
-                    'current_temperature': old_temperature,
-                    'check_time': timezone.now()
-                },
-                message=f'Температура вже встановлена як {old_temperature}'
-            )
-
-        try:
-            client.temperature = new_temperature
-            client.save()
-
-            smart_cache_invalidation()
-
-            # Логування зміни (якщо потрібно)
-            temperature_change_log = {
-                'client_id': client.id,
-                'old_temperature': old_temperature,
-                'new_temperature': new_temperature,
-                'changed_by': request.user.username,
-                'change_time': timezone.now(),
-                'reason': update_reason
-            }
-
-            return api_response(
-                data={
-                    'client': {
-                        'id': client.id,
-                        'name': client.full_name,
-                        'phone': client.phone,
-                        'old_temperature': old_temperature,
-                        'new_temperature': new_temperature,
-                        'temperature_label': dict(Client.TEMPERATURE_CHOICES).get(new_temperature, new_temperature)
-                    },
-                    'change_log': temperature_change_log
-                },
-                meta={
-                    'updated': True,
-                    'update_time': timezone.now(),
-                    'cache_cleared': True,
-                    'changed_by': request.user.username,
-                    'business_impact': self._get_temperature_impact(old_temperature, new_temperature)
-                },
-                message=f'✅ Температуру змінено: {old_temperature} → {new_temperature}'
-            )
-        except Exception as e:
-            return api_response(
-                errors={
-                    'update_error': f'Помилка оновлення температури: {str(e)}',
-                    'details': str(e)
-                },
-                meta={
-                    'error_time': timezone.now(),
-                    'client_id': client.id,
-                    'attempted_change': f'{old_temperature} → {new_temperature}'
-                },
-                status_code=500
-            )
-
     def _get_temperature_impact(self, old_temp, new_temp):
         """Аналіз бізнес-впливу зміни температури"""
         temp_hierarchy = {'cold': 1, 'warm': 2, 'hot': 3, 'loyal': 4, 'sleeping': 0}
@@ -1431,6 +1184,393 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'description': 'Зміна температури в межах однакового рівня активності',
                 'recommendation': 'Продовжити поточну стратегію'
             }
+
+
+# Додаткові API функції для CRM
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def crm_dashboard(request):
+    """🎯 Головний CRM дашборд"""
+    cache_key = f"crm_dashboard_{request.user.id}"
+    cached_result = cache.get(cache_key)
+
+    if cached_result:
+        return APIResponse.success(
+            data=cached_result,
+            meta={
+                "cache_hit": True,
+                "cache_expires_in": 300,
+                "user_id": request.user.id,
+                "data_source": "cache"
+            }
+        )
+
+    try:
+        # Статистика по клієнтах
+        clients_stats = Client.objects.aggregate(
+            total_clients=Count('id'),
+            akb_clients=Count('id', filter=Q(total_orders__gt=0)),
+            cold_leads=Count('id', filter=Q(temperature='cold')),
+            warm_leads=Count('id', filter=Q(temperature='warm')),
+            hot_leads=Count('id', filter=Q(temperature='hot')),
+            sleeping_clients=Count('id', filter=Q(temperature='sleeping')),
+            total_revenue=Sum('total_spent'),
+            avg_ltv=Avg('total_spent', filter=Q(total_orders__gt=0))
+        )
+
+        # ТОП клієнти
+        top_clients = Client.objects.filter(
+            total_orders__gt=0
+        ).order_by('-total_spent')[:5]
+
+        # Ризикові клієнти
+        churn_risk_clients = Client.objects.filter(
+            Q(temperature='sleeping') | Q(rfm_recency__gt=180),
+            total_orders__gt=0
+        ).count()
+
+        # Задачі що потребують уваги
+        my_urgent_tasks = ClientTask.objects.filter(
+            assigned_to=request.user,
+            status__in=['pending', 'in_progress'],
+            due_date__lte=timezone.now() + timedelta(days=1)
+        ).count()
+
+        # Конверсія по температурі
+        temperature_conversion = {}
+        if hasattr(Client, 'TEMPERATURE_CHOICES'):
+            for temp_code, temp_name in Client.TEMPERATURE_CHOICES:
+                clients_count = Client.objects.filter(temperature=temp_code).count()
+                if clients_count > 0:
+                    converted = Client.objects.filter(
+                        temperature=temp_code,
+                        total_orders__gt=0
+                    ).count()
+                    temperature_conversion[temp_code] = {
+                        'name': temp_name,
+                        'total': clients_count,
+                        'converted': converted,
+                        'conversion_rate': round((converted / clients_count) * 100, 1)
+                    }
+
+        # Недавні взаємодії
+        recent_interactions = ClientInteraction.objects.select_related(
+            'client', 'created_by'
+        ).order_by('-created_at')[:5]
+
+        result = {
+            'summary': {
+                'total_clients': clients_stats['total_clients'],
+                'akb_clients': clients_stats['akb_clients'],
+                'hot_leads': clients_stats['hot_leads'],
+                'churn_risk': churn_risk_clients,
+                'total_revenue': float(clients_stats['total_revenue'] or 0),
+                'avg_ltv': float(clients_stats['avg_ltv'] or 0),
+                'urgent_tasks': my_urgent_tasks
+            },
+            'temperature_breakdown': {
+                'cold': clients_stats['cold_leads'],
+                'warm': clients_stats['warm_leads'],
+                'hot': clients_stats['hot_leads'],
+                'sleeping': clients_stats['sleeping_clients']
+            },
+            'temperature_conversion': temperature_conversion,
+            'top_clients': [
+                {
+                    'id': c.id,
+                    'name': c.full_name,
+                    'total_spent': float(getattr(c, 'total_spent', 0) or 0),
+                    'segment': getattr(c, 'akb_segment', 'new'),
+                    'rfm_score': getattr(c, 'rfm_score', '')
+                }
+                for c in top_clients
+            ],
+            'recent_interactions': [
+                {
+                    'id': i.id,
+                    'client_name': i.client.full_name,
+                    'type': i.interaction_type,
+                    'subject': i.subject,
+                    'outcome': i.outcome,
+                    'created_at': i.created_at,
+                    'created_by': i.created_by.username
+                }
+                for i in recent_interactions
+            ]
+        }
+
+        cache.set(cache_key, result, 300)
+
+        return APIResponse.success(
+            data=result,
+            meta={
+                "dashboard_for": request.user.username,
+                "cache_hit": False,
+                "cache_expires_in": 300,
+                "generated_at": timezone.now(),
+                "data_freshness": "5 minutes",
+                "data_source": "database"
+            }
+        )
+    except Exception as e:
+        return APIResponse.system_error(
+            message=f"Помилка генерації дашборду: {str(e)}",
+            exception_details={"exception": str(e)},
+            meta={
+                "error_time": timezone.now(),
+                "user_id": request.user.id
+            }
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_all_client_metrics(request):
+    """🔄 Масове оновлення метрик всіх клієнтів"""
+    if not request.user.is_staff:
+        return APIResponse.permission_error(
+            message="Тільки адміністратори можуть запускати масове оновлення",
+            required_role="staff",
+            meta={
+                "user_role": "regular_user",
+                "required_permissions": ["is_staff"]
+            }
+        )
+
+    try:
+        updated_count = 0
+        errors = []
+
+        for client in Client.objects.all():
+            try:
+                if hasattr(client, 'update_client_metrics'):
+                    client.update_client_metrics()
+                updated_count += 1
+            except Exception as e:
+                errors.append(f"Клієнт {client.id}: {str(e)}")
+
+        return APIResponse.success(
+            data={
+                "updated_count": updated_count,
+                "errors": errors[:10]  # Показуємо перші 10 помилок
+            },
+            message=f'Оновлено метрики для {updated_count} клієнтів',
+            meta={
+                "total_clients": Client.objects.count(),
+                "success_rate": round((updated_count / Client.objects.count() * 100), 2),
+                "update_timestamp": timezone.now(),
+                "errors_count": len(errors)
+            }
+        )
+    except Exception as e:
+        return APIResponse.system_error(
+            message=f"Помилка масового оновлення: {str(e)}",
+            exception_details={"exception": str(e)},
+            meta={
+                "error_time": timezone.now(),
+                "operation": "bulk_metrics_update"
+            }
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_follow_up_tasks(request):
+    """📅 Автоматичне створення задач для follow-up"""
+    try:
+        # Клієнти що потребують реактивації
+        sleeping_clients = Client.objects.filter(
+            temperature='sleeping',
+            total_orders__gt=0
+        ).exclude(
+            tasks__status__in=['pending', 'in_progress'],
+            tasks__title__icontains='реактивація'
+        )
+
+        # Гарячі ліди що потребують уваги
+        hot_leads = Client.objects.filter(
+            temperature='hot'
+        ).exclude(
+            tasks__status__in=['pending', 'in_progress'],
+            tasks__title__icontains='контакт'
+        )
+
+        created_tasks = []
+
+        # Створюємо задачі для сплячих клієнтів
+        for client in sleeping_clients:
+            task = ClientTask.objects.create(
+                client=client,
+                title=f'Реактивація клієнта: {client.full_name}',
+                description=f'Клієнт не купував {getattr(client, "rfm_recency", 0)} днів. Загальна сума покупок: {getattr(client, "total_spent", 0)} грн.',
+                assigned_to=client.assigned_to or request.user,
+                priority='medium',
+                due_date=timezone.now() + timedelta(days=3)
+            )
+            created_tasks.append({
+                'id': task.id,
+                'type': 'reactivation',
+                'title': task.title,
+                'client': task.client.full_name,
+                'priority': task.priority,
+                'due_date': task.due_date
+            })
+
+        # Створюємо задачі для гарячих лідів
+        for client in hot_leads:
+            task = ClientTask.objects.create(
+                client=client,
+                title=f'ТЕРМІНОВИЙ контакт: {client.full_name}',
+                description=f'Гарячий лід! {getattr(client, "next_contact_recommendation", "Потребує уваги")}',
+                assigned_to=client.assigned_to or request.user,
+                priority='urgent',
+                due_date=timezone.now() + timedelta(hours=24)
+            )
+            created_tasks.append({
+                'id': task.id,
+                'type': 'hot_lead',
+                'title': task.title,
+                'client': task.client.full_name,
+                'priority': task.priority,
+                'due_date': task.due_date
+            })
+
+        return APIResponse.success(
+            data={
+                "created_tasks": created_tasks
+            },
+            message=f'Створено {len(created_tasks)} нових задач',
+            meta={
+                "total_created": len(created_tasks),
+                "sleeping_clients_tasks": len(sleeping_clients),
+                "hot_leads_tasks": len(hot_leads),
+                "creation_timestamp": timezone.now()
+            }
+        )
+    except Exception as e:
+        return APIResponse.system_error(
+            message=f"Помилка створення задач: {str(e)}",
+            exception_details={"exception": str(e)},
+            meta={
+                "error_time": timezone.now(),
+                "operation": "create_follow_up_tasks"
+            }
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def client_segments_for_marketing(request):
+    """🎯 Сегменти клієнтів для маркетингових кампаній"""
+    try:
+        # VIP клієнти для персональних пропозицій
+        vip_clients = Client.objects.filter(akb_segment='vip')
+
+        # Клієнти з ризиком відтоку для реактивації
+        churn_risk = Client.objects.filter(
+            temperature='sleeping',
+            total_spent__gte=5000
+        )
+
+        # Лояльні клієнти для програм лояльності
+        loyal_clients = Client.objects.filter(
+            temperature='loyal',
+            total_orders__gte=3
+        )
+
+        # Нові клієнти для онбордингу
+        new_customers = Client.objects.filter(
+            total_orders=1,
+            first_purchase_date__gte=timezone.now() - timedelta(days=30)
+        )
+
+        segments_data = {
+            'vip_clients': {
+                'count': vip_clients.count(),
+                'description': 'VIP клієнти для персональних пропозицій',
+                'avg_spent': float(vip_clients.aggregate(avg=Avg('total_spent'))['avg'] or 0),
+                'clients': [
+                    {
+                        'id': c.id,
+                        'name': c.full_name,
+                        'phone': c.phone,
+                        'total_spent': float(getattr(c, 'total_spent', 0) or 0)
+                    }
+                    for c in vip_clients[:5]
+                ]
+            },
+            'churn_risk': {
+                'count': churn_risk.count(),
+                'description': 'Цінні клієнти з ризиком відтоку',
+                'potential_loss': float(churn_risk.aggregate(total=Sum('total_spent'))['total'] or 0),
+                'clients': [
+                    {
+                        'id': c.id,
+                        'name': c.full_name,
+                        'phone': c.phone,
+                        'days_inactive': getattr(c, 'rfm_recency', 0),
+                        'total_spent': float(getattr(c, 'total_spent', 0) or 0)
+                    }
+                    for c in churn_risk[:5]
+                ]
+            },
+            'loyal_clients': {
+                'count': loyal_clients.count(),
+                'description': 'Лояльні клієнти для програм лояльності',
+                'avg_orders': float(loyal_clients.aggregate(avg=Avg('total_orders'))['avg'] or 0),
+                'clients': [
+                    {
+                        'id': c.id,
+                        'name': c.full_name,
+                        'phone': c.phone,
+                        'total_orders': getattr(c, 'total_orders', 0) or 0
+                    }
+                    for c in loyal_clients[:5]
+                ]
+            },
+            'new_customers': {
+                'count': new_customers.count(),
+                'description': 'Нові клієнти для онбордингу',
+                'total_revenue': float(new_customers.aggregate(total=Sum('total_spent'))['total'] or 0),
+                'clients': [
+                    {
+                        'id': c.id,
+                        'name': c.full_name,
+                        'phone': c.phone,
+                        'first_purchase': getattr(c, 'first_purchase_date', None)
+                    }
+                    for c in new_customers[:5]
+                ]
+            }
+        }
+
+        return APIResponse.success(
+            data={
+                "segments": segments_data
+            },
+            meta={
+                "total_segments": len(segments_data),
+                "analysis_date": timezone.now(),
+                "segments_summary": {
+                    segment: data['count']
+                    for segment, data in segments_data.items()
+                }
+            }
+        )
+    except Exception as e:
+        return APIResponse.system_error(
+            message=f"Помилка аналізу сегментів: {str(e)}",
+            exception_details={"exception": str(e)},
+            meta={
+                "error_time": timezone.now(),
+                "operation": "client_segments_analysis"
+            }
+        )
+
+
+
+
 
 # 🚀 ФУНКЦІЯ ПЕРЕВІРКИ ДУБЛІКАТІВ
 def check_duplicate_lead(phone, full_name=None, order_number=None, time_window_minutes=30):
@@ -1563,49 +1703,64 @@ class ExternalLeadView(APIView):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def leads_report(request):
-    """📊 Базовий звіт по лідах з фінансовою інформацією"""
+    """📊 Базовий звіт по лідах"""
 
-    # 🛡️ ПЕРЕВІРКА ПРАВ АДМІНІСТРАТОРА
+    # Перевірка прав
     if not request.user.is_staff:
-        return api_response(
-            errors={
-                "permission_denied": "Доступ тільки для адміністраторів",
+        return APIResponse.permission_error(
+            message="Доступ тільки для адміністраторів",
+            required_role="staff",
+            meta={
                 "user_info": {
                     "username": request.user.username,
                     "is_staff": request.user.is_staff,
                     "is_authenticated": request.user.is_authenticated
                 }
-            },
-            status_code=403
+            }
         )
 
     date_from = request.GET.get("date_from")
     date_to = request.GET.get("date_to")
 
     if not date_from or not date_to:
-        return api_response(
-            errors={"dates": "Потрібно вказати ?date_from=...&date_to=..."},
-            status_code=400
+        return APIResponse.validation_error(
+            message="Потрібно вказати дати",
+            field_errors={
+                "date_from": ["Це поле обов'язкове"] if not date_from else [],
+                "date_to": ["Це поле обов'язкове"] if not date_to else []
+            },
+            details={
+                "example": "?date_from=2024-01-01&date_to=2024-01-31"
+            }
         )
 
     try:
         start = datetime.strptime(date_from, "%Y-%m-%d")
         end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
     except ValueError:
-        return api_response(
-            errors={"date_format": "Невірний формат дати. Використовуйте YYYY-MM-DD"},
-            status_code=400
+        return APIResponse.validation_error(
+            message="Невірний формат дати",
+            field_errors={
+                "date_format": ["Використовуйте формат YYYY-MM-DD"]
+            },
+            details={
+                "provided_date_from": date_from,
+                "provided_date_to": date_to,
+                "expected_format": "YYYY-MM-DD"
+            }
         )
 
     cache_key = f"leads_report_{date_from}_{date_to}"
     cached_result = cache.get(cache_key)
+
     if cached_result:
-        return api_response(
+        return APIResponse.success(
             data=cached_result,
             meta={
                 "cache_hit": True,
                 "cache_expires_in": 60,
-                "generated_at": timezone.now()
+                "generated_at": timezone.now(),
+                "data_source": "cache"
             }
         )
 
@@ -1632,20 +1787,22 @@ def leads_report(request):
             "total_leads": leads.count(),
             "expected_sum": expected_sum,
             "received_sum": received_sum,
-            "delta": delta
+            "delta": delta,
+            "payment_percentage": round((received_sum / expected_sum * 100), 1) if expected_sum > 0 else 0
         },
         "by_status": status_counts
     }
 
     cache.set(cache_key, result, 60)
 
-    return api_response(
+    return APIResponse.success(
         data=result,
         meta={
             "cache_hit": False,
             "cache_expires_in": 60,
             "generated_at": timezone.now(),
-            "report_type": "leads_summary"
+            "report_type": "leads_summary",
+            "data_source": "database"
         }
     )
 
@@ -2196,18 +2353,21 @@ def map_config_api(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def funnel_data(request):
+    """📊 Дані воронки продажів"""
     date_from_raw = request.GET.get("from")
     date_to_raw = request.GET.get("to")
     manager_id = request.GET.get("manager_id")
 
     cache_key = f"funnel_{date_from_raw}_{date_to_raw}_{manager_id}"
     cached_result = cache.get(cache_key)
+
     if cached_result:
-        return api_response(
+        return APIResponse.success(
             data=cached_result,
             meta={
                 "cache_hit": True,
-                "cache_expires_in": 30
+                "cache_expires_in": 30,
+                "data_source": "cache"
             }
         )
 
@@ -2223,14 +2383,14 @@ def funnel_data(request):
     if manager_id:
         leads = leads.filter(assigned_to_id=manager_id)
 
-    # 🆕 ОНОВЛЕНА ВОРОНКА З НОВИМ СТАТУСОМ
+    # Воронка з новим статусом
     funnel = leads.aggregate(
         queued=Count('id', filter=Q(status='queued')),
         in_work=Count('id', filter=Q(status='in_work')),
         awaiting_prepayment=Count('id', filter=Q(status='awaiting_prepayment')),
         preparation=Count('id', filter=Q(status='preparation')),
         warehouse_processing=Count('id', filter=Q(status='warehouse_processing')),
-        warehouse_ready=Count('id', filter=Q(status='warehouse_ready')),  # 🆕 НОВИЙ СТАТУС
+        warehouse_ready=Count('id', filter=Q(status='warehouse_ready')),
         on_the_way=Count('id', filter=Q(status='on_the_way')),
         completed=Count('id', filter=Q(status='completed')),
         declined=Count('id', filter=Q(status='declined'))
@@ -2249,12 +2409,13 @@ def funnel_data(request):
                 (funnel["warehouse_ready"] / (funnel["warehouse_processing"] + funnel["warehouse_ready"]) * 100), 1
             ) if (funnel["warehouse_processing"] + funnel["warehouse_ready"]) > 0 else 0
         },
-        "conversion_rate": f"{conversion}%"
+        "conversion_rate": f"{conversion}%",
+        "total_leads": total_attempted
     }
 
     cache.set(cache_key, result, 30)
 
-    return api_response(
+    return APIResponse.success(
         data=result,
         meta={
             "filters": {
@@ -2263,9 +2424,11 @@ def funnel_data(request):
                 "manager_id": manager_id
             },
             "total_leads": total_attempted,
+            "cache_hit": False,
             "cache_expires_in": 30,
             "generated_at": timezone.now(),
-            "report_type": "funnel_analytics"
+            "report_type": "funnel_analytics",
+            "data_source": "database"
         }
     )
 
@@ -2336,7 +2499,7 @@ class LeadViewSet(viewsets.ModelViewSet):
                 count=Count('id')
             ).order_by('-count')
 
-            return api_response(
+            return APIResponse.success(
                 data=paginated_response.data['results'],
                 meta={
                     "pagination": {
@@ -2377,7 +2540,7 @@ class LeadViewSet(viewsets.ModelViewSet):
             total_revenue=Sum('price', filter=Q(status='completed'))
         )
 
-        return api_response(
+        return APIResponse.success(
             data=serializer.data,
             meta={
                 "total_leads": len(serializer.data),
@@ -2395,372 +2558,104 @@ class LeadViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         """➕ Створення нового ліда"""
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
 
-        # Перевіряємо дублікати
-        phone = serializer.validated_data.get('phone')
-        full_name = serializer.validated_data.get('full_name')
-        order_number = serializer.validated_data.get('order_number')
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as e:
+            # Обробляємо стандартизовані помилки з серіалізатора
+            if hasattr(e, 'detail') and isinstance(e.detail, dict):
+                for field, errors in e.detail.items():
+                    if isinstance(errors, list):
+                        for error in errors:
+                            if isinstance(error, dict) and 'type' in error:
+                                # Це наша стандартизована помилка
+                                if error['type'] == 'DUPLICATE_PHONE':
+                                    return APIResponse.duplicate_error(
+                                        resource="Лід",
+                                        duplicate_field="телефон",
+                                        duplicate_value=error['details']['phone'],
+                                        existing_resource=error['details']['existing_lead']
+                                    )
+                                elif error['type'] == 'DUPLICATE_ORDER_NUMBER':
+                                    return APIResponse.duplicate_error(
+                                        resource="Лід",
+                                        duplicate_field="номер замовлення",
+                                        duplicate_value=error['details']['order_number'],
+                                        existing_resource=error['details']['existing_lead']
+                                    )
+                                elif error['type'] == 'INVALID_PRICE':
+                                    return APIResponse.validation_error(
+                                        message="Невалідна ціна",
+                                        field_errors={field: [error['message']]},
+                                        details=error['details']
+                                    )
 
-        if phone:
-            is_duplicate, existing_lead = check_duplicate_lead(
-                phone=phone,
-                full_name=full_name,
-                order_number=order_number
+            # Загальна помилка валідації
+            return APIResponse.validation_error(
+                message="Помилка валідації даних",
+                field_errors=e.detail if hasattr(e, 'detail') else {"general": [str(e)]}
             )
 
-            if is_duplicate:
-                return api_response(
-                    errors={
-                        "duplicate_lead": "Знайдено дублікат ліда",
-                        "existing_lead": {
+        try:
+            # Перевіряємо дублікати
+            phone = serializer.validated_data.get('phone')
+            full_name = serializer.validated_data.get('full_name')
+            order_number = serializer.validated_data.get('order_number')
+
+            if phone:
+                is_duplicate, existing_lead = check_duplicate_lead(
+                    phone=phone,
+                    full_name=full_name,
+                    order_number=order_number
+                )
+
+                if is_duplicate:
+                    return APIResponse.duplicate_error(
+                        resource="Лід",
+                        duplicate_field="телефон",
+                        duplicate_value=phone,
+                        existing_resource={
                             "id": existing_lead.id,
                             "full_name": existing_lead.full_name,
                             "phone": existing_lead.phone,
                             "created_at": existing_lead.created_at,
                             "status": existing_lead.status
+                        },
+                        meta={
+                            "duplicate_check": {
+                                "phone": phone,
+                                "normalized_phone": Client.normalize_phone(phone),
+                                "check_time": timezone.now()
+                            }
                         }
-                    },
-                    meta={
-                        "duplicate_check": {
-                            "phone": phone,
-                            "normalized_phone": Client.normalize_phone(phone),
-                            "check_time": timezone.now()
-                        }
-                    },
-                    status_code=409
-                )
+                    )
 
-        try:
             instance = serializer.save()
             smart_cache_invalidation(
                 lead_id=instance.id,
                 manager_id=instance.assigned_to.id if instance.assigned_to else None
             )
 
-            return api_response(
+            return APIResponse.success(
                 data=serializer.data,
-                meta={
-                    "created": True,
-                    "lead_id": instance.id,
-                    "creation_time": timezone.now(),
-                    "cache_cleared": True,
-                    "initial_status": instance.status,
-                    "assigned_to": instance.assigned_to.username if instance.assigned_to else None
-                },
                 message=f"✅ Лід #{instance.id} для {instance.full_name} успішно створено",
+                meta={
+                    "lead_id": instance.id,
+                    "created_at": instance.created_at.isoformat(),
+                    "initial_status": instance.status,
+                    "assigned_to": instance.assigned_to.username if instance.assigned_to else None,
+                    "cache_cleared": True
+                },
                 status_code=201
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "creation_error": f"Помилка створення ліда: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(
+                message=f"Помилка створення ліда: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "attempted_data": request.data
-                },
-                status_code=500
-            )
-
-    @action(detail=False, methods=['post'], url_path='upload-file/(?P<lead_id>[^/.]+)')
-    def upload_file(self, request, lead_id=None):
-        """📎 Завантаження файлів до ліда"""
-        try:
-            lead = Lead.objects.get(id=lead_id)
-        except Lead.DoesNotExist:
-            return api_response(
-                errors={'lead': 'Лід не знайдено'},
-                status_code=404
-            )
-
-        files = request.FILES.getlist('file')
-        if not files:
-            return api_response(
-                errors={'files': 'Файли не передано'},
-                status_code=400
-            )
-
-        uploaded_files = []
-        for f in files:
-            obj = LeadFile.objects.create(lead=lead, file=f)
-            uploaded_files.append({
-                "file_id": obj.id,
-                "file_name": obj.file.name,
-                "file_url": request.build_absolute_uri(obj.file.url),
-                "uploaded_at": obj.uploaded_at
-            })
-
-        return api_response(
-            data={
-                'lead': {
-                    'id': lead.id,
-                    'full_name': lead.full_name
-                },
-                'uploaded_files': uploaded_files
-            },
-            meta={
-                'files_count': len(uploaded_files),
-                'upload_timestamp': timezone.now()
-            },
-            message=f'✅ Додано {len(uploaded_files)} файл(ів)'
-        )
-
-    @action(detail=False, methods=['get'], url_path='files/(?P<lead_id>[^/.]+)')
-    def files(self, request, lead_id=None):
-        """📁 Отримання файлів ліда"""
-        try:
-            lead = Lead.objects.get(id=lead_id)
-        except Lead.DoesNotExist:
-            return api_response(
-                errors={'lead': 'Лід не знайдено'},
-                status_code=404
-            )
-
-        files = lead.uploaded_files.all()
-        files_list = [{
-            "id": f.id,
-            "name": f.file.name,
-            "url": request.build_absolute_uri(f.file.url),
-            "uploaded_at": f.uploaded_at,
-        } for f in files]
-
-        return api_response(
-            data={
-                'lead': {
-                    'id': lead.id,
-                    'full_name': lead.full_name
-                },
-                'files': files_list
-            },
-            meta={
-                'total_files': len(files_list),
-                'total_size_bytes': sum(f.file.size for f in files if f.file)
-            }
-        )
-
-    @action(detail=False, methods=['get'], url_path='payments/(?P<lead_id>[^/.]+)')
-    def payments(self, request, lead_id=None):
-        """💰 Отримання платежів по ліду"""
-        try:
-            lead = Lead.objects.get(id=lead_id)
-        except Lead.DoesNotExist:
-            return api_response(
-                errors={'lead': 'Лід не знайдено'},
-                status_code=404
-            )
-
-        cache_key = f"lead_payments_{lead.id}"
-        cached_payments = cache.get(cache_key)
-
-        if cached_payments is None:
-            payments = lead.payment_operations.all()
-            cached_payments = [
-                {
-                    "id": p.id,
-                    "type": p.operation_type,
-                    "amount": float(p.amount),
-                    "comment": p.comment,
-                    "created_at": p.created_at,
-                } for p in payments
-            ]
-            cache.set(cache_key, cached_payments, 30)
-
-        total_expected = sum(p['amount'] for p in cached_payments if p['type'] == 'expected')
-        total_received = sum(p['amount'] for p in cached_payments if p['type'] == 'received')
-
-        return api_response(
-            data={
-                'lead': {
-                    'id': lead.id,
-                    'full_name': lead.full_name,
-                    'price': float(lead.price or 0)
-                },
-                'payments': cached_payments
-            },
-            meta={
-                'summary': {
-                    'total_payments': len(cached_payments),
-                    'total_expected': total_expected,
-                    'total_received': total_received,
-                    'balance': total_received - total_expected
-                },
-                'cache_hit': cached_payments == cache.get(cache_key),
-                'cache_expires_in': 30
-            }
-        )
-
-    @action(detail=False, methods=['post'], url_path='add-payment/(?P<lead_id>[^/.]+)')
-    def add_payment(self, request, lead_id=None):
-        """💰 Додавання платежу до ліда"""
-        try:
-            lead = Lead.objects.get(id=lead_id)
-        except Lead.DoesNotExist:
-            return api_response(
-                errors={'lead': 'Лід не знайдено'},
-                status_code=404
-            )
-
-        operation_type = request.data.get('operation_type')
-        amount = request.data.get('amount')
-        comment = request.data.get('comment', '')
-
-        if not operation_type or not amount:
-            return api_response(
-                errors={
-                    'required_fields': 'operation_type і amount обов\'язкові',
-                    'example': {
-                        'operation_type': 'received',
-                        'amount': 1500,
-                        'comment': 'Отримано від клієнта'
-                    }
-                },
-                status_code=400
-            )
-
-        payment = LeadPaymentOperation.objects.create(
-            lead=lead,
-            operation_type=operation_type,
-            amount=amount,
-            comment=comment
-        )
-
-        smart_cache_invalidation(lead_id=lead.id)
-
-        return api_response(
-            data={
-                'payment': {
-                    'id': payment.id,
-                    'type': payment.operation_type,
-                    'amount': float(payment.amount),
-                    'comment': payment.comment,
-                    'created_at': payment.created_at,
-                },
-                'lead_payment_info': LeadStatusValidator.get_payment_info(lead)
-            },
-            meta={
-                "payment_added": True,
-                "lead_id": lead.id
-            },
-            message='✅ Платіж додано',
-            status_code=201
-        )
-
-    def _get_last_activity_date(self, instance, payments):
-        """Безпечне отримання дати останньої активності"""
-        dates = [instance.created_at]
-
-        # Додаємо дату оновлення статусу якщо є
-        status_updated_at = getattr(instance, 'status_updated_at', None)
-        if status_updated_at:
-            dates.append(status_updated_at)
-
-        # Додаємо дату останнього платежу якщо є
-        if payments:
-            dates.append(payments[0].created_at)
-
-        # Фільтруємо None значення та повертаємо максимальну дату
-        valid_dates = [d for d in dates if d is not None]
-        return max(valid_dates) if valid_dates else instance.created_at
-
-    @action(detail=False, methods=['put', 'patch'], url_path='update-status/(?P<lead_id>[^/.]+)')
-    def update_status(self, request, lead_id=None):
-        """🔄 Зміна статусу ліда з фінансовим контролем"""
-        try:
-            lead = Lead.objects.get(id=lead_id)
-        except Lead.DoesNotExist:
-            return api_response(
-                errors={'lead': 'Лід не знайдено'},
-                status_code=404
-            )
-
-        new_status = request.data.get('status')
-        if not new_status:
-            return api_response(
-                errors={
-                    'status': 'Потрібно вказати статус',
-                    'available_statuses': LeadStatusValidator.get_allowed_transitions(lead.status, lead)
-                },
-                status_code=400
-            )
-
-        # Валідація через професійний валідатор
-        validation = validate_lead_status_change(lead.id, new_status, request.user)
-
-        if not validation['allowed']:
-            return api_response(
-                errors={
-                    'status_change': validation['reason'],
-                    'current_status': validation.get('current_status'),
-                    'available_transitions': validation.get('available_transitions'),
-                    'payment_info': validation.get('payment_info'),
-                    'next_action': validation.get('next_action')
-                },
-                status_code=422
-            )
-
-        old_status = lead.status
-
-        try:
-            # Автоматичні фінансові операції при зміні статусів
-            if new_status == "on_the_way" and old_status != "on_the_way":
-                LeadPaymentOperation.objects.get_or_create(
-                    lead=lead,
-                    operation_type='expected',
-                    defaults={
-                        "amount": lead.price or 0,
-                        "comment": f"Очікується повна оплата за лід #{lead.id}"
-                    }
-                )
-
-            elif new_status == "completed":
-                payment_info = LeadStatusValidator.get_payment_info(lead)
-                if payment_info['shortage'] > 0:
-                    return api_response(
-                        errors={
-                            'payment': f"Неможливо завершити - не вистачає {payment_info['shortage']} грн",
-                            'payment_info': payment_info
-                        },
-                        status_code=422
-                    )
-
-            # Зміна статусу
-            lead.status = new_status
-            lead.status_updated_at = timezone.now()
-            lead.save()
-
-            smart_cache_invalidation(
-                lead_id=lead.id,
-                manager_id=lead.assigned_to.id if lead.assigned_to else None
-            )
-
-            return api_response(
-                data={
-                    'lead': {
-                        'id': lead.id,
-                        'full_name': lead.full_name,
-                        'old_status': old_status,
-                        'new_status': new_status,
-                        'status_updated_at': lead.status_updated_at
-                    },
-                    'payment_info': LeadStatusValidator.get_payment_info(lead),
-                    'next_action': LeadStatusValidator.get_next_required_action(lead)
-                },
-                meta={
-                    "status_changed": True,
-                    "change_timestamp": timezone.now()
-                },
-                message=f'✅ Статус змінено: {LeadStatusValidator.STATUS_NAMES.get(old_status)} → {LeadStatusValidator.STATUS_NAMES.get(new_status)}'
-            )
-
-        except Exception as e:
-            return api_response(
-                errors={
-                    'exception': f'Помилка при зміні статусу: {str(e)}',
-                    'details': str(e)
-                },
-                status_code=500
+                }
             )
 
     def update(self, request, *args, **kwargs):
@@ -2768,7 +2663,6 @@ class LeadViewSet(viewsets.ModelViewSet):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
 
-        # Зберігаємо старі дані для порівняння
         old_data = {
             'status': instance.status,
             'price': float(instance.price or 0),
@@ -2778,7 +2672,43 @@ class LeadViewSet(viewsets.ModelViewSet):
         }
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
+
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as e:
+            # Обробляємо помилки валідації статусу
+            if hasattr(e, 'detail') and isinstance(e.detail, dict):
+                for field, errors in e.detail.items():
+                    if field == 'status' and isinstance(errors, list):
+                        for error in errors:
+                            if isinstance(error, dict) and 'type' in error:
+                                # Це помилка зміни статусу
+                                if error['type'] == StatusChangeError.INSUFFICIENT_FUNDS.value:
+                                    return LeadStatusResponse.missing_payment(
+                                        current_status=error['details']['current_status']['code'],
+                                        attempted_status=error['details']['attempted_status']['code'],
+                                        payment_info=error['details']['payment_info'],
+                                        required_amount=error['details'].get('required_payment')
+                                    )
+                                elif error['type'] == StatusChangeError.MISSING_PRICE.value:
+                                    return LeadStatusResponse.missing_price(
+                                        current_status=error['details']['current_status']['code'],
+                                        attempted_status=error['details']['attempted_status']['code'],
+                                        lead_id=instance.id
+                                    )
+                                elif error['type'] == StatusChangeError.INVALID_TRANSITION.value:
+                                    return LeadStatusResponse.invalid_transition(
+                                        current_status=error['details']['current_status']['code'],
+                                        attempted_status=error['details']['attempted_status']['code'],
+                                        available_transitions=error['details']['available_transitions'],
+                                        reason=error['message']
+                                    )
+
+            # Загальна помилка валідації
+            return APIResponse.validation_error(
+                message="Помилка валідації даних",
+                field_errors=e.detail if hasattr(e, 'detail') else {"general": [str(e)]}
+            )
 
         try:
             updated_instance = serializer.save()
@@ -2787,7 +2717,7 @@ class LeadViewSet(viewsets.ModelViewSet):
                 manager_id=updated_instance.assigned_to.id if updated_instance.assigned_to else None
             )
 
-            # Визначаємо що змінилось
+            # Визначаємо зміни
             changes = {}
             if old_data['status'] != updated_instance.status:
                 changes['status'] = {
@@ -2820,8 +2750,9 @@ class LeadViewSet(viewsets.ModelViewSet):
                     'new': updated_instance.phone
                 }
 
-            return api_response(
+            return APIResponse.success(
                 data=serializer.data,
+                message=f"✅ Лід #{updated_instance.id} успішно оновлено",
                 meta={
                     "updated": True,
                     "lead_id": updated_instance.id,
@@ -2831,20 +2762,16 @@ class LeadViewSet(viewsets.ModelViewSet):
                     "changes_made": changes,
                     "total_changes": len(changes),
                     "payment_info": LeadStatusValidator.get_payment_info(updated_instance)
-                },
-                message=f"✅ Лід #{updated_instance.id} успішно оновлено"
+                }
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "update_error": f"Помилка оновлення ліда: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(
+                message=f"Помилка оновлення ліда: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "lead_id": instance.id
-                },
-                status_code=500
+                }
             )
 
     def retrieve(self, request, *args, **kwargs):
@@ -2933,7 +2860,7 @@ class LeadViewSet(viewsets.ModelViewSet):
             }
         }
 
-        return api_response(
+        return APIResponse.success(
             data=extended_data,
             meta={
                 "lead_id": instance.id,
@@ -2952,38 +2879,39 @@ class LeadViewSet(viewsets.ModelViewSet):
 
         # Перевіряємо чи можна видаляти
         if instance.status in ['completed', 'on_the_way']:
-            return api_response(
-                errors={
-                    "deletion_blocked": f"Неможливо видалити лід зі статусом '{instance.status}'",
-                    "current_status": instance.status,
-                    "reason": "Ліди в процесі доставки або завершені не можна видаляти",
-                    "solution": "Змініть статус ліда або зверніться до адміністратора"
-                },
+            return APIResponse.business_rule_error(
+                message=f"Неможливо видалити лід зі статусом '{instance.status}'",
+                rule_name="DELETION_STATUS_RESTRICTION",
+                suggested_actions=[
+                    "Змініть статус ліда на дозволений",
+                    "Зверніться до адміністратора для форс-видалення"
+                ],
                 meta={
                     "lead_id": instance.id,
                     "lead_name": instance.full_name,
+                    "current_status": instance.status,
                     "check_time": timezone.now()
-                },
-                status_code=422
+                }
             )
 
         # Перевіряємо платежі
         payments = instance.payment_operations.filter(operation_type='received')
         if payments.exists():
             total_received = sum(float(p.amount) for p in payments)
-            return api_response(
-                errors={
-                    "deletion_blocked": f"Неможливо видалити лід з платежами",
-                    "total_received": total_received,
-                    "payments_count": payments.count(),
-                    "reason": "Лід має платежі, що надійшли",
-                    "solution": "Спочатку оброб'іть всі платежі"
-                },
+            return APIResponse.business_rule_error(
+                message=f"Неможливо видалити лід з платежами",
+                rule_name="DELETION_PAYMENT_RESTRICTION",
+                suggested_actions=[
+                    "Спочатку оброб'іть всі платежі",
+                    "Поверніть кошти клієнту",
+                    "Зверніться до бухгалтера для вирішення"
+                ],
                 meta={
                     "lead_id": instance.id,
+                    "total_received": total_received,
+                    "payments_count": payments.count(),
                     "check_time": timezone.now()
-                },
-                status_code=422
+                }
             )
 
         try:
@@ -3011,32 +2939,718 @@ class LeadViewSet(viewsets.ModelViewSet):
             instance.delete()
             smart_cache_invalidation()
 
-            return api_response(
-                data={
-                    "deleted_lead": lead_info
-                },
+            return APIResponse.success(
+                data={"deleted_lead": lead_info},
+                message=f"✅ Лід #{lead_info['id']} для {lead_info['full_name']} успішно видалено",
                 meta={
                     "deleted": True,
                     "deletion_time": timezone.now(),
                     "cache_cleared": True,
                     "files_deleted": files_deleted,
                     "cleanup_performed": True
-                },
-                message=f"✅ Лід #{lead_info['id']} для {lead_info['full_name']} успішно видалено",
-                status_code=200
+                }
             )
         except Exception as e:
-            return api_response(
-                errors={
-                    "deletion_error": f"Помилка видалення ліда: {str(e)}",
-                    "details": str(e)
-                },
+            return APIResponse.system_error(
+                message=f"Помилка видалення ліда: {str(e)}",
+                exception_details={"exception": str(e)},
                 meta={
                     "error_time": timezone.now(),
                     "lead_id": instance.id
-                },
-                status_code=500
+                }
             )
+
+    @action(detail=False, methods=['put', 'patch'], url_path='update-status/(?P<lead_id>[^/.]+)')
+    def update_status(self, request, lead_id=None):
+        """🔄 Зміна статусу ліда з фінансовим контролем"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return APIResponse.not_found_error(
+                resource="Лід",
+                resource_id=lead_id
+            )
+
+        files = request.FILES.getlist('file')
+        if not files:
+            return APIResponse.validation_error(
+                message="Файли не передано",
+                field_errors={
+                    "file": ["Потрібно передати мінімум один файл"]
+                }
+            )
+
+        try:
+            uploaded_files = []
+            for f in files:
+                obj = LeadFile.objects.create(lead=lead, file=f)
+                uploaded_files.append({
+                    "file_id": obj.id,
+                    "file_name": obj.file.name,
+                    "file_url": request.build_absolute_uri(obj.file.url),
+                    "uploaded_at": obj.uploaded_at
+                })
+
+            return APIResponse.success(
+                data={
+                    'lead': {
+                        'id': lead.id,
+                        'full_name': lead.full_name
+                    },
+                    'uploaded_files': uploaded_files
+                },
+                message=f'✅ Додано {len(uploaded_files)} файл(ів)',
+                meta={
+                    'files_count': len(uploaded_files),
+                    'upload_timestamp': timezone.now()
+                },
+                status_code=201
+            )
+        except Exception as e:
+            return APIResponse.system_error(
+                message=f"Помилка завантаження файлів: {str(e)}",
+                exception_details={"exception": str(e)},
+                meta={
+                    "error_time": timezone.now(),
+                    "lead_id": lead.id
+                }
+            )
+
+    @action(detail=False, methods=['get'], url_path='files/(?P<lead_id>[^/.]+)')
+    def files(self, request, lead_id=None):
+        """📁 Отримання файлів ліда"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return APIResponse.not_found_error(
+                resource="Лід",
+                resource_id=lead_id
+            )
+
+        try:
+            files = lead.uploaded_files.all()
+            files_list = [{
+                "id": f.id,
+                "name": f.file.name,
+                "url": request.build_absolute_uri(f.file.url),
+                "uploaded_at": f.uploaded_at,
+                "size": f.file.size if f.file else 0
+            } for f in files]
+
+            return APIResponse.success(
+                data={
+                    'lead': {
+                        'id': lead.id,
+                        'full_name': lead.full_name
+                    },
+                    'files': files_list
+                },
+                meta={
+                    'total_files': len(files_list),
+                    'total_size_bytes': sum(f['size'] for f in files_list),
+                    'generated_at': timezone.now()
+                }
+            )
+        except Exception as e:
+            return APIResponse.system_error(
+                message=f"Помилка отримання файлів: {str(e)}",
+                exception_details={"exception": str(e)},
+                meta={
+                    "error_time": timezone.now(),
+                    "lead_id": lead.id
+                }
+            )
+
+    def _get_last_activity_date(self, instance, payments):
+        """Безпечне отримання дати останньої активності"""
+        dates = [instance.created_at]
+
+        # Додаємо дату оновлення статусу якщо є
+        status_updated_at = getattr(instance, 'status_updated_at', None)
+        if status_updated_at:
+            dates.append(status_updated_at)
+
+        # Додаємо дату останнього платежу якщо є
+        if payments:
+            dates.append(payments[0].created_at)
+
+        # Фільтруємо None значення та повертаємо максимальну дату
+        valid_dates = [d for d in dates if d is not None]
+        return max(valid_dates) if valid_dates else instance.created_at
+
+
+# Додаткові API функції для роботи з лідами
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def add_lead_payment(request, id_lead):
+    """💰 Додавання платежу до ліда (альтернативний endpoint)"""
+    try:
+        lead = Lead.objects.get(id=id_lead)
+    except Lead.DoesNotExist:
+        return APIResponse.not_found_error(
+            resource="Лід",
+            resource_id=id_lead
+        )
+
+    operation_type = request.data.get('operation_type')
+    amount = request.data.get('amount')
+    comment = request.data.get('comment', '')
+
+    if not operation_type or not amount:
+        return APIResponse.validation_error(
+            message="Поля 'operation_type' і 'amount' обов'язкові",
+            field_errors={
+                "operation_type": ["Це поле обов'язкове"] if not operation_type else [],
+                "amount": ["Це поле обов'язкове"] if not amount else []
+            },
+            details={
+                "example": {
+                    "operation_type": "received",
+                    "amount": 1500,
+                    "comment": "Отримано від клієнта"
+                }
+            }
+        )
+
+    try:
+        payment = LeadPaymentOperation.objects.create(
+            lead=lead,
+            operation_type=operation_type,
+            amount=amount,
+            comment=comment
+        )
+
+        smart_cache_invalidation(lead_id=lead.id)
+
+        return APIResponse.success(
+            data={
+                'payment': {
+                    'id': payment.id,
+                    'type': payment.operation_type,
+                    'amount': float(payment.amount),
+                    'comment': payment.comment,
+                    'created_at': payment.created_at,
+                },
+                'lead_payment_info': LeadStatusValidator.get_payment_info(lead)
+            },
+            message='✅ Платіж додано',
+            meta={
+                "payment_added": True,
+                "lead_id": lead.id,
+                "cache_cleared": True
+            },
+            status_code=201
+        )
+    except Exception as e:
+        return APIResponse.system_error(
+            message=f"Помилка додавання платежу: {str(e)}",
+            exception_details={"exception": str(e)},
+            meta={
+                "error_time": timezone.now(),
+                "lead_id": lead.id
+            }
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def all_payments(request):
+    """💰 Всі платежі з фільтрацією"""
+    lead_id = request.GET.get("lead_id")
+    client_id = request.GET.get("client_id")
+    op_type = request.GET.get("type")
+
+    cache_key = f"payments_{lead_id}_{client_id}_{op_type}"
+    cached_result = cache.get(cache_key)
+
+    if cached_result:
+        return APIResponse.success(
+            data=cached_result,
+            meta={
+                "cache_hit": True,
+                "cache_expires_in": 60,
+                "data_source": "cache"
+            }
+        )
+
+    try:
+        payments = LeadPaymentOperation.objects.select_related('lead')
+
+        if lead_id:
+            payments = payments.filter(lead_id=lead_id)
+        if client_id:
+            payments = payments.filter(lead__phone__in=
+                                       Client.objects.filter(id=client_id).values_list("phone", flat=True)
+                                       )
+        if op_type:
+            payments = payments.filter(operation_type=op_type)
+
+        payments_list = [
+            {
+                "id": p.id,
+                "lead_id": p.lead_id,
+                "type": p.operation_type,
+                "amount": float(p.amount),
+                "comment": p.comment,
+                "created_at": p.created_at,
+            } for p in payments.order_by("-created_at")
+        ]
+
+        # Підрахунки
+        total_expected = sum(p['amount'] for p in payments_list if p['type'] == 'expected')
+        total_received = sum(p['amount'] for p in payments_list if p['type'] == 'received')
+
+        result = {
+            "payments": payments_list
+        }
+
+        cache.set(cache_key, result, 60)
+
+        return APIResponse.success(
+            data=result,
+            meta={
+                "filters": {
+                    "lead_id": lead_id,
+                    "client_id": client_id,
+                    "operation_type": op_type
+                },
+                "summary": {
+                    "total_payments": len(payments_list),
+                    "total_expected": total_expected,
+                    "total_received": total_received,
+                    "balance": total_received - total_expected
+                },
+                "cache_hit": False,
+                "cache_expires_in": 60,
+                "generated_at": timezone.now(),
+                "data_source": "database"
+            }
+        )
+    except Exception as e:
+        return APIResponse.system_error(
+            message=f"Помилка отримання платежів: {str(e)}",
+            exception_details={"exception": str(e)},
+            meta={
+                "error_time": timezone.now(),
+                "filters": {
+                    "lead_id": lead_id,
+                    "client_id": client_id,
+                    "operation_type": op_type
+                }
+            }
+        )
+
+
+class ExternalLeadView(APIView):
+    """🌐 Створення лідів з зовнішніх джерел"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        print(f"📥 API: Отримано запит на створення ліда: {request.data}")
+
+        serializer = ExternalLeadSerializer(data=request.data)
+        if not serializer.is_valid():
+            return APIResponse.validation_error(
+                message="Помилка валідації даних",
+                field_errors=serializer.errors,
+                details={"validation_type": "external_lead_serializer"}
+            )
+
+        phone = serializer.validated_data.get('phone')
+        full_name = serializer.validated_data.get('full_name')
+        order_number = serializer.validated_data.get('order_number')
+
+        is_duplicate, existing_lead = check_duplicate_lead(
+            phone=phone,
+            full_name=full_name,
+            order_number=order_number,
+            time_window_minutes=30
+        )
+
+        if is_duplicate:
+            print(f"🚫 ДУБЛІКАТ! Знайдено існуючий лід #{existing_lead.id}")
+            return APIResponse.duplicate_error(
+                resource="Лід",
+                duplicate_field="телефон",
+                duplicate_value=phone,
+                existing_resource={
+                    "id": existing_lead.id,
+                    "full_name": existing_lead.full_name,
+                    "phone": existing_lead.phone,
+                    "created_at": existing_lead.created_at,
+                    "status": existing_lead.status
+                },
+                meta={
+                    "duplicate_check": {
+                        "phone": phone,
+                        "normalized_phone": Client.normalize_phone(phone) if phone else None,
+                        "full_name": full_name,
+                        "time_window": "30 minutes"
+                    }
+                }
+            )
+
+        try:
+            print(f"✅ Не дублікат - створюємо новий лід")
+            lead, context = create_lead_with_logic(serializer.validated_data)
+
+            smart_cache_invalidation(
+                lead_id=lead.id,
+                manager_id=lead.assigned_to.id if lead.assigned_to else None
+            )
+
+            return APIResponse.success(
+                data={
+                    "lead": {
+                        "id": lead.id,
+                        "full_name": lead.full_name,
+                        "phone": lead.phone,
+                        "status": context['final_status'],
+                        "assigned_manager": context['assigned_to'],
+                        "created_at": lead.created_at,
+                    }
+                },
+                message=f"✅ Лід створено для {lead.full_name} — статус: {context['final_status'].upper()}",
+                meta={
+                    "created": True,
+                    "details": context,
+                    "processing_time": timezone.now(),
+                    "source": "external_api"
+                },
+                status_code=201
+            )
+        except Exception as e:
+            print(f"❌ Помилка створення ліда: {str(e)}")
+            return APIResponse.system_error(
+                message=f"Помилка створення ліда: {str(e)}",
+                exception_details={"exception": str(e)},
+                meta={
+                    "error_time": timezone.now(),
+                    "attempted_data": serializer.validated_data
+                }
+            )
+
+
+class CreateLeadView(APIView):
+    """📝 Створення лідів через API"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        print(f"📥 CREATE API: Отримано запит: {request.data}")
+
+        serializer = LeadSerializer(data=request.data)
+        if not serializer.is_valid():
+            return APIResponse.validation_error(
+                message="Помилка валідації даних",
+                field_errors=serializer.errors,
+                details={"validation_type": "lead_serializer"}
+            )
+
+        order_number = serializer.validated_data.get('order_number')
+
+        # Перевірка по номеру замовлення
+        if order_number:
+            existing = Lead.objects.filter(order_number=order_number).first()
+            if existing:
+                print(f"🚫 ДУБЛІКАТ! Номер замовлення {order_number} вже є в ліді #{existing.id}")
+                return APIResponse.duplicate_error(
+                    resource="Лід",
+                    duplicate_field="номер замовлення",
+                    duplicate_value=order_number,
+                    existing_resource={
+                        "id": existing.id,
+                        "full_name": existing.full_name,
+                        "phone": existing.phone,
+                        "created_at": existing.created_at,
+                        "status": existing.status,
+                        "assigned_to": existing.assigned_to.username if existing.assigned_to else None
+                    },
+                    meta={
+                        "duplicate_check": {
+                            "order_number": order_number,
+                            "check_time": timezone.now(),
+                            "existing_lead_id": existing.id
+                        }
+                    }
+                )
+
+        try:
+            lead = serializer.save()
+            print(f"✅ Створено лід #{lead.id} з номером замовлення {order_number}")
+
+            smart_cache_invalidation(
+                lead_id=lead.id,
+                manager_id=lead.assigned_to.id if lead.assigned_to else None
+            )
+
+            lead_data = {
+                "id": lead.id,
+                "full_name": lead.full_name,
+                "phone": lead.phone,
+                "order_number": order_number,
+                "status": lead.status,
+                "price": float(lead.price or 0),
+                "assigned_to": lead.assigned_to.username if lead.assigned_to else None,
+                "created_at": lead.created_at,
+                "source": getattr(lead, 'source', 'manual_creation')
+            }
+
+            return APIResponse.success(
+                data={
+                    "lead": lead_data
+                },
+                message=f"✅ Лід #{lead.id} створено успішно для {lead.full_name}",
+                meta={
+                    "created": True,
+                    "creation_method": "manual_api",
+                    "processing_time": timezone.now(),
+                    "cache_cleared": True,
+                    "lead_id": lead.id
+                },
+                status_code=201
+            )
+
+        except Exception as e:
+            print(f"❌ Помилка створення ліда: {str(e)}")
+            return APIResponse.system_error(
+                message=f"Не вдалося створити лід: {str(e)}",
+                exception_details={"exception": str(e)},
+                meta={
+                    "error_time": timezone.now(),
+                    "attempted_data": serializer.validated_data
+                }
+            ).not_found_error(
+                resource="Лід",
+                resource_id=lead_id
+            )
+
+        new_status = request.data.get('status')
+        if not new_status:
+            return APIResponse.validation_error(
+                message="Поле 'status' є обов'язковим",
+                field_errors={"status": ["Це поле є обов'язковим"]},
+                details={
+                    "available_statuses": LeadStatusValidator.get_allowed_transitions(lead.status, lead)
+                }
+            )
+
+        # Валідація через валідатор
+        validation = validate_lead_status_change(lead_id, new_status, request.user)
+
+        if not validation['allowed']:
+            # Визначаємо тип помилки
+            if 'не вистачає' in validation['reason']:
+                return LeadStatusResponse.missing_payment(
+                    current_status=lead.status,
+                    attempted_status=new_status,
+                    payment_info=validation.get('payment_info', {})
+                )
+            elif 'ціна' in validation['reason'].lower():
+                return LeadStatusResponse.missing_price(
+                    current_status=lead.status,
+                    attempted_status=new_status,
+                    lead_id=lead_id
+                )
+            else:
+                return LeadStatusResponse.invalid_transition(
+                    current_status=lead.status,
+                    attempted_status=new_status,
+                    available_transitions=validation.get('available_transitions', []),
+                    reason=validation['reason']
+                )
+
+        # Зміна статусу
+        old_status = lead.status
+
+        try:
+            # Автоматичні фінансові операції
+            if new_status == "on_the_way" and old_status != "on_the_way":
+                LeadPaymentOperation.objects.get_or_create(
+                    lead=lead,
+                    operation_type='expected',
+                    defaults={
+                        "amount": lead.price or 0,
+                        "comment": f"Очікується повна оплата за лід #{lead.id}"
+                    }
+                )
+
+            elif new_status == "completed":
+                payment_info = LeadStatusValidator.get_payment_info(lead)
+                if payment_info['shortage'] > 0:
+                    return LeadStatusResponse.missing_payment(
+                        current_status=lead.status,
+                        attempted_status=new_status,
+                        payment_info=payment_info,
+                        required_amount=float(payment_info['shortage'])
+                    )
+
+            # Зміна статусу
+            lead.status = new_status
+            lead.status_updated_at = timezone.now()
+            lead.save()
+
+            smart_cache_invalidation(
+                lead_id=lead.id,
+                manager_id=lead.assigned_to.id if lead.assigned_to else None
+            )
+
+            return LeadStatusResponse.success_transition(
+                lead_id=lead.id,
+                old_status=old_status,
+                new_status=new_status,
+                lead_data={
+                    "id": lead.id,
+                    "full_name": lead.full_name,
+                    "phone": lead.phone,
+                    "status": lead.status,
+                    "price": float(lead.price or 0),
+                    "status_updated_at": lead.status_updated_at.isoformat()
+                },
+                payment_info=LeadStatusValidator.get_payment_info(lead),
+                next_action=LeadStatusValidator.get_next_required_action(lead)
+            )
+
+        except Exception as e:
+            return APIResponse.system_error(
+                message=f"Помилка при зміні статусу: {str(e)}",
+                exception_details={"exception": str(e)},
+                meta={
+                    "error_time": timezone.now(),
+                    "lead_id": lead.id,
+                    "attempted_transition": f"{old_status} → {new_status}"
+                }
+            )
+
+    @action(detail=False, methods=['post'], url_path='add-payment/(?P<lead_id>[^/.]+)')
+    def add_payment(self, request, lead_id=None):
+        """💰 Додавання платежу до ліда"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return APIResponse.not_found_error(
+                resource="Лід",
+                resource_id=lead_id
+            )
+
+        operation_type = request.data.get('operation_type')
+        amount = request.data.get('amount')
+        comment = request.data.get('comment', '')
+
+        if not operation_type or not amount:
+            return APIResponse.validation_error(
+                message="Поля 'operation_type' і 'amount' обов'язкові",
+                field_errors={
+                    "operation_type": ["Це поле обов'язкове"] if not operation_type else [],
+                    "amount": ["Це поле обов'язкове"] if not amount else []
+                },
+                details={
+                    "example": {
+                        "operation_type": "received",
+                        "amount": 1500,
+                        "comment": "Отримано від клієнта"
+                    }
+                }
+            )
+
+        try:
+            payment = LeadPaymentOperation.objects.create(
+                lead=lead,
+                operation_type=operation_type,
+                amount=amount,
+                comment=comment
+            )
+
+            smart_cache_invalidation(lead_id=lead.id)
+
+            return APIResponse.success(
+                data={
+                    'payment': {
+                        'id': payment.id,
+                        'type': payment.operation_type,
+                        'amount': float(payment.amount),
+                        'comment': payment.comment,
+                        'created_at': payment.created_at,
+                    },
+                    'lead_payment_info': LeadStatusValidator.get_payment_info(lead)
+                },
+                message='✅ Платіж додано',
+                meta={
+                    "payment_added": True,
+                    "lead_id": lead.id,
+                    "cache_cleared": True
+                },
+                status_code=201
+            )
+        except Exception as e:
+            return APIResponse.system_error(
+                message=f"Помилка додавання платежу: {str(e)}",
+                exception_details={"exception": str(e)},
+                meta={
+                    "error_time": timezone.now(),
+                    "lead_id": lead.id
+                }
+            )
+
+    @action(detail=False, methods=['get'], url_path='payments/(?P<lead_id>[^/.]+)')
+    def payments(self, request, lead_id=None):
+        """💰 Отримання платежів по ліду"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return APIResponse.not_found_error(
+                resource="Лід",
+                resource_id=lead_id
+            )
+
+        cache_key = f"lead_payments_{lead.id}"
+        cached_payments = cache.get(cache_key)
+
+        if cached_payments is None:
+            payments = lead.payment_operations.all()
+            cached_payments = [
+                {
+                    "id": p.id,
+                    "type": p.operation_type,
+                    "amount": float(p.amount),
+                    "comment": p.comment,
+                    "created_at": p.created_at,
+                } for p in payments
+            ]
+            cache.set(cache_key, cached_payments, 30)
+
+        total_expected = sum(p['amount'] for p in cached_payments if p['type'] == 'expected')
+        total_received = sum(p['amount'] for p in cached_payments if p['type'] == 'received')
+
+        return APIResponse.success(
+            data={
+                'lead': {
+                    'id': lead.id,
+                    'full_name': lead.full_name,
+                    'price': float(lead.price or 0)
+                },
+                'payments': cached_payments
+            },
+            meta={
+                'summary': {
+                    'total_payments': len(cached_payments),
+                    'total_expected': total_expected,
+                    'total_received': total_received,
+                    'balance': total_received - total_expected
+                },
+                'cache_hit': cached_payments == cache.get(cache_key),
+                'cache_expires_in': 30,
+                'generated_at': timezone.now()
+            }
+        )
+
+    @action(detail=False, methods=['post'], url_path='upload-file/(?P<lead_id>[^/.]+)')
+    def upload_file(self, request, lead_id=None):
+        """📎 Завантаження файлів до ліда"""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return APIResponse
 
 
 
@@ -3172,15 +3786,17 @@ def all_payments(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_managers(request):
+    """👥 Список менеджерів"""
     cache_key = "managers_list"
     cached_result = cache.get(cache_key)
 
     if cached_result:
-        return api_response(
+        return APIResponse.success(
             data=cached_result,
             meta={
                 "cache_hit": True,
-                "cache_expires_in": 120
+                "cache_expires_in": 120,
+                "data_source": "cache"
             }
         )
 
@@ -3189,12 +3805,14 @@ def list_managers(request):
 
     cache.set(cache_key, serializer.data, 120)
 
-    return api_response(
+    return APIResponse.success(
         data=serializer.data,
         meta={
             "total_managers": len(serializer.data),
+            "cache_hit": False,
             "cache_expires_in": 120,
-            "generated_at": timezone.now()
+            "generated_at": timezone.now(),
+            "data_source": "database"
         }
     )
 
@@ -3593,17 +4211,17 @@ class CreateLeadView(APIView):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def check_lead_duplicate(request):
-    """
-    🔍 Endpoint для перевірки чи є лід дублікатом БЕЗ створення
-    """
+    """🔍 Перевірка дублікатів лідів"""
     phone = request.data.get('phone')
     full_name = request.data.get('full_name')
     order_number = request.data.get('order_number')
 
     if not phone:
-        return api_response(
-            errors={"phone": "Телефон обов'язковий для перевірки дублікатів"},
-            status_code=400
+        return APIResponse.validation_error(
+            message="Телефон обов'язковий для перевірки дублікатів",
+            field_errors={
+                "phone": ["Це поле обов'язкове"]
+            }
         )
 
     is_duplicate, existing_lead = check_duplicate_lead(
@@ -3652,11 +4270,12 @@ def check_lead_duplicate(request):
         meta_info["recommendation"] = "Можна створювати новий лід"
         message = "✅ Дублікатів не знайдено, лід можна створювати"
 
-    return api_response(
+    return APIResponse.success(
         data=duplicate_check_data,
-        meta=meta_info,
-        message=message
+        message=message,
+        meta=meta_info
     )
+
 
 
 class ClientInteractionViewSet(viewsets.ModelViewSet):
@@ -4255,16 +4874,17 @@ def lead_statuses(request):
     statuses_data = [
         {
             "code": status_code,
-            "name": status_name
+            "name": status_name,
+            "description": LeadStatusValidator.STATUS_NAMES.get(status_code, status_name)
         }
         for status_code, status_name in status_choices
     ]
 
-    # 🔥 ВИПРАВЛЕНО: статуси прямо в data, без зайвого рівня
-    return api_response(
-        data=statuses_data,  # ← БЕЗ {"statuses": ...}
+    return APIResponse.success(
+        data=statuses_data,
         meta={
             "total_statuses": len(status_choices),
-            "generated_at": timezone.now()
+            "generated_at": timezone.now(),
+            "includes_descriptions": True
         }
     )
