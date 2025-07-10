@@ -1,4 +1,4 @@
-# backend/utils/api_responses.py - ТІЛЬКИ ОСНОВНІ ВИПРАВЛЕННЯ
+# backend/utils/api_responses.py - ВИПРАВЛЕНИЙ ФАЙЛ
 
 from rest_framework.response import Response
 from django.utils import timezone
@@ -27,52 +27,38 @@ class StatusChangeError(Enum):
 
 class APIResponse:
     """
-    🔥 ВИПРАВЛЕННЯ: success тепер в data
+    🔥 ВИПРАВЛЕНИЙ КЛАС - НЕ ЗАГОРТАЄ data В {result:, success:}
     """
 
     @staticmethod
     def success(data=None, message=None, meta=None, status_code=200):
         """
-        ✅ Успішна відповідь - success в data, message і errors в meta
+        ✅ Успішна відповідь - data передається НАПРЯМУ
 
-        Результат:
+        БУЛО (неправильно):
         {
             "data": {
-                "success": true,
-                "leads": [...],
-                "access": "..."
-            },
-            "meta": {
-                "message": "...",
-                "errors": null,
-                "timestamp": "...",
-                "status_code": 200
+                "result": [масив_лідів],
+                "success": true
             }
         }
-        """
-        # Якщо data None - створюємо порожній об'єкт
-        if data is None:
-            data = {}
 
-        # Якщо data не словник - обгортаємо в словник
-        if not isinstance(data, dict):
-            data = {"result": data}
-
-        # 🔥 ГОЛОВНЕ: додаємо success в data
-        data["success"] = True
-
-        # 🔥 ГОЛОВНЕ: message і errors в meta
-        meta_data = {
-            "message": message,
-            "errors": None,
-            "timestamp": timezone.now().isoformat(),
-            "status_code": status_code,
-            **(meta or {})
+        СТАЛО (правильно):
+        {
+            "data": [масив_лідів]  # ← НАПРЯМУ!
         }
+        """
 
+        # 🔥 НЕ ЗАГОРТАЄМО data в {result:, success:}!
         response_data = {
-            "data": data,
-            "meta": meta_data
+            "data": data,  # ← НАПРЯМУ БЕЗ ЗАГОРТАННЯ!
+            "meta": {
+                "message": message,
+                "errors": None,
+                "timestamp": timezone.now().isoformat(),
+                "status_code": status_code,
+                **(meta or {})
+            }
         }
 
         return Response(response_data, status=status_code)
@@ -80,43 +66,25 @@ class APIResponse:
     @staticmethod
     def error(error_type, message, details=None, field_errors=None, meta=None, status_code=400):
         """
-        ❌ Помилка - success в data, message і errors в meta
-
-        Результат:
-        {
-            "data": {
-                "success": false
-            },
-            "meta": {
-                "message": "...",
-                "errors": {...},
-                "timestamp": "...",
-                "status_code": 400
-            }
-        }
+        ❌ Помилка - data = null, все в meta
         """
         if isinstance(error_type, (ErrorType, StatusChangeError)):
             error_type = error_type.value
 
-        # 🔥 ГОЛОВНЕ: message і errors в meta
-        meta_data = {
-            "message": message,
-            "errors": {
-                "type": error_type,
-                "message": message,
-                "details": details or {},
-                "field_errors": field_errors or {}
-            },
-            "timestamp": timezone.now().isoformat(),
-            "status_code": status_code,
-            **(meta or {})
-        }
-
         response_data = {
-            "data": {
-                "success": False
-            },
-            "meta": meta_data
+            "data": None,  # ← При помилці data = null
+            "meta": {
+                "message": message,
+                "errors": {
+                    "type": error_type,
+                    "message": message,
+                    "details": details or {},
+                    "field_errors": field_errors or {}
+                },
+                "timestamp": timezone.now().isoformat(),
+                "status_code": status_code,
+                **(meta or {})
+            }
         }
 
         return Response(response_data, status=status_code)
@@ -164,12 +132,50 @@ class APIResponse:
             status_code=409
         )
 
+    @staticmethod
+    def system_error(message="Системна помилка", exception_details=None, meta=None):
+        """🔥 Системна помилка сервера"""
+        return APIResponse.error(
+            error_type=ErrorType.SYSTEM,
+            message=message,
+            details=exception_details or {},
+            meta=meta,
+            status_code=500
+        )
+
+    @staticmethod
+    def permission_error(message="Недостатньо прав", required_role=None, meta=None):
+        """🔒 Помилка доступу"""
+        details = {}
+        if required_role:
+            details["required_role"] = required_role
+
+        return APIResponse.error(
+            error_type=ErrorType.PERMISSION,
+            message=message,
+            details=details,
+            meta=meta,
+            status_code=403
+        )
+
+    @staticmethod
+    def business_rule_error(message, rule_name=None, suggested_actions=None, meta=None):
+        """📋 Порушення бізнес-правила"""
+        return APIResponse.error(
+            error_type=ErrorType.BUSINESS_RULE,
+            message=message,
+            details={
+                "rule_name": rule_name,
+                "suggested_actions": suggested_actions or []
+            },
+            meta=meta,
+            status_code=422
+        )
+
 
 class LeadStatusResponse:
     """
     🔥 СПЕЦІАЛЬНІ ВІДПОВІДІ ДЛЯ СТАТУСІВ ЛІДІВ
-
-    Тепер використовує нову структуру з data/meta
     """
 
     @staticmethod
@@ -189,40 +195,33 @@ class LeadStatusResponse:
 
         error_message = reason or f"Неможливо перейти з '{LeadStatusValidator.STATUS_NAMES.get(current_status)}' в '{LeadStatusValidator.STATUS_NAMES.get(attempted_status)}'"
 
-        return {
+        return Response({
             "data": None,
             "meta": {
                 "message": error_message,
                 "errors": {
-                    "status": [
-                        {
-                            "type": "INVALID_TRANSITION",
-                            "message": error_message,
-                            "details": {
-                                "current_status": {
-                                    "code": current_status,
-                                    "name": LeadStatusValidator.STATUS_NAMES.get(current_status)
-                                },
-                                "attempted_status": {
-                                    "code": attempted_status,
-                                    "name": LeadStatusValidator.STATUS_NAMES.get(attempted_status)
-                                },
-                                "available_transitions": transitions_info
-                            }
-                        }
-                    ]
+                    "type": "INVALID_TRANSITION",
+                    "message": error_message,
+                    "details": {
+                        "current_status": {
+                            "code": current_status,
+                            "name": LeadStatusValidator.STATUS_NAMES.get(current_status)
+                        },
+                        "attempted_status": {
+                            "code": attempted_status,
+                            "name": LeadStatusValidator.STATUS_NAMES.get(attempted_status)
+                        },
+                        "available_transitions": transitions_info
+                    }
                 },
                 "status_code": 400,
-                "code": "invalid_transition",
-                "timestamp": timezone.now()
+                "timestamp": timezone.now().isoformat()
             }
-        }
+        }, status=400)
 
     @staticmethod
     def missing_payment(current_status, attempted_status, payment_info, required_amount=None):
-        """
-        💰 Недостатньо коштів для переходу
-        """
+        """💰 Недостатньо коштів для переходу"""
         if required_amount:
             message = f"Для переходу в '{attempted_status}' потрібно {required_amount} грн"
         else:
@@ -250,9 +249,7 @@ class LeadStatusResponse:
 
     @staticmethod
     def missing_price(current_status, attempted_status, lead_id):
-        """
-        💸 Не встановлена ціна ліда
-        """
+        """💸 Не встановлена ціна ліда"""
         return APIResponse.error(
             error_type=StatusChangeError.MISSING_PRICE,
             message=f"Неможливо перейти в '{attempted_status}' без встановленої ціни ліда",
@@ -274,9 +271,7 @@ class LeadStatusResponse:
 
     @staticmethod
     def success_transition(lead_id, old_status, new_status, lead_data, payment_info=None, next_action=None):
-        """
-        ✅ Успішна зміна статусу
-        """
+        """✅ Успішна зміна статусу"""
         return APIResponse.success(
             data={
                 "lead": lead_data,
@@ -296,8 +291,7 @@ class LeadStatusResponse:
         )
 
 
-
-# 🔥 ГОЛОВНЕ: Старий api_response тепер використовує новий APIResponse
+# 🔥 СТАРИЙ api_response ДЛЯ ЗВОРОТНОЇ СУМІСНОСТІ
 def api_response(data=None, meta=None, message=None, errors=None, status_code=200):
     """
     ЗВОРОТНА СУМІСНІСТЬ: Стара функція тепер використовує новий APIResponse
@@ -317,46 +311,3 @@ def api_response(data=None, meta=None, message=None, errors=None, status_code=20
             meta=meta,
             status_code=status_code
         )
-
-
-@staticmethod
-def system_error(message="Системна помилка", exception_details=None, meta=None):
-    """🔥 Системна помилка сервера"""
-    return APIResponse.error(
-        error_type=ErrorType.SYSTEM,
-        message=message,
-        details=exception_details or {},
-        meta=meta,
-        status_code=500
-    )
-
-
-@staticmethod
-def permission_error(message="Недостатньо прав", required_role=None, meta=None):
-    """🔒 Помилка доступу"""
-    details = {}
-    if required_role:
-        details["required_role"] = required_role
-
-    return APIResponse.error(
-        error_type=ErrorType.PERMISSION,
-        message=message,
-        details=details,
-        meta=meta,
-        status_code=403
-    )
-
-
-@staticmethod
-def business_rule_error(message, rule_name=None, suggested_actions=None, meta=None):
-    """📋 Порушення бізнес-правила"""
-    return APIResponse.error(
-        error_type=ErrorType.BUSINESS_RULE,
-        message=message,
-        details={
-            "rule_name": rule_name,
-            "suggested_actions": suggested_actions or []
-        },
-        meta=meta,
-        status_code=422
-    )

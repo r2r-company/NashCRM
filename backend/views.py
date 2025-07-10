@@ -2492,8 +2492,9 @@ class LeadViewSet(viewsets.ModelViewSet):
                 count=Count('id')
             ).order_by('-count')
 
+            # 🔥 ГОЛОВНЕ ВИПРАВЛЕННЯ: повертаємо НАПРЯМУ масив лідів в data
             return APIResponse.success(
-                data=paginated_response.data['results'],
+                data=paginated_response.data['results'],  # ← ЦЕ МАСИВ ЛІДІВ
                 meta={
                     "pagination": {
                         "count": paginated_response.data['count'],
@@ -2525,7 +2526,7 @@ class LeadViewSet(viewsets.ModelViewSet):
                 }
             )
 
-        # Без пагінації
+        # Без пагінації - теж виправляємо
         serializer = self.get_serializer(queryset, many=True)
 
         full_stats = queryset.aggregate(
@@ -2533,8 +2534,9 @@ class LeadViewSet(viewsets.ModelViewSet):
             total_revenue=Sum('price', filter=Q(status='completed'))
         )
 
+        # 🔥 ГОЛОВНЕ ВИПРАВЛЕННЯ: повертаємо НАПРЯМУ масив лідів в data
         return APIResponse.success(
-            data=serializer.data,
+            data=serializer.data,  # ← ЦЕ МАСИВ ЛІДІВ, НЕ ОБ'ЄКТ!
             meta={
                 "total_leads": len(serializer.data),
                 "filters_applied": {
