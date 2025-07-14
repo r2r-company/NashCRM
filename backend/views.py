@@ -1556,125 +1556,170 @@ def client_segments_for_marketing(request):
 # 🚀 ФУНКЦІЯ ПЕРЕВІРКИ ДУБЛІКАТІВ
 def check_duplicate_lead(phone, full_name=None, order_number=None, time_window_minutes=30):
     """
-    Перевіряє чи є лід дублікатом за останні X хвилин
+    🔥 ВИПРАВЛЕНА ФУНКЦІЯ: перевіряє ТІЛЬКИ номер замовлення на дублікати
+    Телефон НЕ є дублікатом - використовується для знаходження існуючого клієнта
     """
     from django.utils import timezone
     from datetime import timedelta
 
-    if not phone:
-        return False, None
+    print(f"🔍 Перевірка дублікатів:")
+    print(f"   📞 Телефон: {phone}")
+    print(f"   👤 Ім'я: {full_name}")
+    print(f"   🔢 Номер замовлення: {order_number}")
 
-    # Нормалізуємо телефон
-    normalized_phone = Client.normalize_phone(phone)
-
-    # Час для перевірки (за останні 30 хвилин)
-    time_threshold = timezone.now() - timedelta(minutes=time_window_minutes)
-
-    # Базовий пошук по телефону + часу
-    recent_leads = Lead.objects.filter(
-        phone=normalized_phone,
-        created_at__gte=time_threshold
-    ).order_by('-created_at')
-
-    if not recent_leads.exists():
-        return False, None
-
-    # Якщо є номер замовлення - строга перевірка
+    # 🔥 ТІЛЬКИ НОМЕР ЗАМОВЛЕННЯ є дублікатом
     if order_number:
-        exact_match = recent_leads.filter(order_number=order_number).first()
-        if exact_match:
-            return True, exact_match
+        existing_by_order = Lead.objects.filter(order_number=order_number).first()
+        if existing_by_order:
+            print(f"❌ ДУБЛІКАТ по номеру замовлення: {order_number} (лід #{existing_by_order.id})")
+            return True, existing_by_order
 
-    # Якщо є ім'я - перевіряємо ім'я + телефон
-    if full_name:
-        name_match = recent_leads.filter(full_name__iexact=full_name.strip()).first()
-        if name_match:
-            return True, name_match
+    # 🔥 ТЕЛЕФОН НЕ є ДУБЛІКАТОМ - логуємо для інформації
+    if phone:
+        normalized_phone = Client.normalize_phone(phone)
+        existing_leads = Lead.objects.filter(phone=normalized_phone)
 
-    # Якщо тільки телефон за останні 5 хвилин - теж дублікат
-    very_recent = recent_leads.filter(
-        created_at__gte=timezone.now() - timedelta(minutes=5)
-    ).first()
+        if existing_leads.exists():
+            print(f"📞 Знайдено {existing_leads.count()} лідів з таким телефоном - це НОРМАЛЬНО")
+            print(f"   Система використає існуючого клієнта: {normalized_phone}")
+        else:
+            print(f"📞 Новий телефон - буде створено нового клієнта: {normalized_phone}")
 
-    if very_recent:
-        return True, very_recent
-
+    print(f"✅ Дублікатів НЕ ЗНАЙДЕНО - можна створювати лід")
     return False, None
 
 
+
 class ExternalLeadView(APIView):
+    """🌐 ВИПРАВЛЕНА логіка створення лідів з зовнішніх джерел"""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         print(f"📥 API: Отримано запит на створення ліда: {request.data}")
 
         serializer = ExternalLeadSerializer(data=request.data)
-        if serializer.is_valid():
-            phone = serializer.validated_data.get('phone')
-            full_name = serializer.validated_data.get('full_name')
-            order_number = serializer.validated_data.get('order_number')
+        if not serializer.is_valid():
+            print(f"❌ ВАЛІДАЦІЯ НЕ ПРОЙШЛА: {serializer.errors}")
 
-            is_duplicate, existing_lead = check_duplicate_lead(
-                phone=phone,
-                full_name=full_name,
-                order_number=order_number,
-                time_window_minutes=30
+            # Перевіряємо чи це помилка номера замовлення
+            if 'order_number' in serializer.errors:
+                order_error = serializer.errors['order_number'][0]
+                if isinstance(order_error, dict) and order_error.get('type') == 'DUPLICATE_ORDER_NUMBER':
+                    return APIResponse.duplicate_error(
+                        resource="Лід",
+                        duplicate_field="номер замовлення",
+                        duplicate_value=order_error['details']['order_number'],
+                        existing_resource=order_error['details']['existing_lead'],
+                        meta={
+                            "duplicate_check": {
+                                "order_number": order_error['details']['order_number'],
+                                "check_time": timezone.now()
+                            }
+                        }
+                    )
+
+            return APIResponse.validation_error(
+                message="Помилка валідації даних",
+                field_errors=serializer.errors,
+                details={"validation_type": "external_lead_serializer"}
             )
 
-            if is_duplicate:
-                return APIResponse.duplicate_error(  # ← ЗАМІСТЬ api_response
-                    resource="Лід",
-                    duplicate_field="телефон",
-                    duplicate_value=phone,
-                    existing_resource={
-                        "id": existing_lead.id,
-                        "full_name": existing_lead.full_name,
-                        "phone": existing_lead.phone,
-                        "created_at": existing_lead.created_at,
-                        "status": existing_lead.status
-                    },
-                    meta={
-                        "duplicate_check": {
-                            "phone": phone,
-                            "normalized_phone": Client.normalize_phone(phone) if phone else None,
-                            "full_name": full_name,
-                            "time_window": "30 minutes"
-                        }
-                    }
-                )
+        phone = serializer.validated_data.get('phone')
+        full_name = serializer.validated_data.get('full_name')
+        order_number = serializer.validated_data.get('order_number')
 
-            print(f"✅ Не дублікат - створюємо новий лід")
-            lead, context = create_lead_with_logic(serializer.validated_data)
+        # 🔥 ВИПРАВЛЕНА ПЕРЕВІРКА: тільки номер замовлення
+        is_duplicate, existing_lead = check_duplicate_lead(
+            phone=phone,
+            full_name=full_name,
+            order_number=order_number,
+            time_window_minutes=30
+        )
+
+        if is_duplicate:
+            print(f"🚫 ДУБЛІКАТ! Номер замовлення {order_number} вже використовується в ліді #{existing_lead.id}")
+            return APIResponse.duplicate_error(
+                resource="Лід",
+                duplicate_field="номер замовлення",
+                duplicate_value=order_number,
+                existing_resource={
+                    "id": existing_lead.id,
+                    "full_name": existing_lead.full_name,
+                    "phone": existing_lead.phone,
+                    "order_number": existing_lead.order_number,
+                    "created_at": existing_lead.created_at,
+                    "status": existing_lead.status
+                },
+                meta={
+                    "duplicate_check": {
+                        "order_number": order_number,
+                        "check_time": timezone.now()
+                    }
+                }
+            )
+
+        try:
+            print(f"✅ Номер замовлення вільний - створюємо лід")
+
+            # Створюємо лід через серіалізатор (він автоматично знайде/створить клієнта)
+            lead = serializer.save()
+
+            # Якщо потрібно використати сервіс
+            # lead, context = create_lead_with_logic(serializer.validated_data)
 
             smart_cache_invalidation(
                 lead_id=lead.id,
                 manager_id=lead.assigned_to.id if lead.assigned_to else None
             )
 
-            return APIResponse.success(  # ← ЗАМІСТЬ api_response
+            # Інформація про клієнта
+            client_info = None
+            if lead.phone:
+                try:
+                    client = Client.objects.filter(phone=lead.phone).first()
+                    if client:
+                        client_info = {
+                            "id": client.id,
+                            "full_name": client.full_name,
+                            "temperature": client.temperature,
+                            "akb_segment": client.akb_segment,
+                            "total_spent": float(client.total_spent or 0),
+                            "total_orders": client.total_orders or 0
+                        }
+                except:
+                    pass
+
+            return APIResponse.success(
                 data={
                     "lead": {
                         "id": lead.id,
                         "full_name": lead.full_name,
                         "phone": lead.phone,
-                        "status": context['final_status'],
-                        "assigned_manager": context['assigned_to'],
+                        "order_number": lead.order_number,
+                        "status": lead.status,
+                        "assigned_manager": lead.assigned_to.username if lead.assigned_to else None,
                         "created_at": lead.created_at,
-                    }
+                    },
+                    "client_info": client_info
                 },
-                message=f"✅ Лід створено для {lead.full_name} — статус: {context['final_status'].upper()}",
+                message=f"✅ Лід #{lead.id} створено для {lead.full_name} — статус: {lead.status.upper()}",
                 meta={
                     "created": True,
-                    "details": context,
-                    "processing_time": timezone.now()
+                    "processing_time": timezone.now(),
+                    "source": "external_api",
+                    "client_found_or_created": client_info is not None
                 },
                 status_code=201
             )
-
-            # Помилка валідації
-            return APIResponse.validation_error(  # ← ЗАМІСТЬ api_response
-                message="Помилка валідації даних",
-                field_errors=serializer.errors
+        except Exception as e:
+            print(f"❌ Помилка створення ліда: {str(e)}")
+            return APIResponse.system_error(
+                message=f"Помилка створення ліда: {str(e)}",
+                exception_details={"exception": str(e)},
+                meta={
+                    "error_time": timezone.now(),
+                    "attempted_data": serializer.validated_data
+                }
             )
 
 
@@ -2654,68 +2699,67 @@ class LeadViewSet(viewsets.ModelViewSet):
             )
 
     def update(self, request, *args, **kwargs):
-        """📝 Оновлення ліда з правильною обробкою помилок статусу"""
+        """📝 ВИПРАВЛЕНЕ оновлення ліда з ПРАВИЛЬНОЮ обробкою статусів"""
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+
+        print(f"📝 ОНОВЛЕННЯ ЛІДА #{instance.id}")
+        print(f"   Поточний статус: {instance.status}")
+        print(f"   Дані запиту: {request.data}")
 
         old_data = {
             'status': instance.status,
             'price': float(instance.price or 0),
-            'assigned_to': instance.assigned_to.username if instance.assigned_to else None,
-            'full_name': instance.full_name,
-            'phone': instance.phone
+            'assigned_to': instance.assigned_to.username if instance.assigned_to else None
         }
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
 
         try:
             serializer.is_valid(raise_exception=True)
+            print(f"✅ Валідація серіалізатора пройшла")
         except ValidationError as e:
-            print(f"❌ Помилка валідації: {e.detail}")
+            print(f"❌ Помилка валідації серіалізатора: {e.detail}")
 
-            # 🔥 ГОЛОВНА ПЕРЕВІРКА: чи це наша помилка переходу статусу?
-
-            # Спочатку перевіряємо атрибут серіалізатора
+            # 🔥 ПЕРЕВІРЯЄМО ЧИ ЦЕ ПОМИЛКА ПЕРЕХОДУ СТАТУСУ
             if hasattr(serializer, '_status_transition_error'):
                 error_info = serializer._status_transition_error
 
-                current_status = error_info['current_status']
-                attempted_status = error_info['attempted_status']
-                reason = error_info['reason']
-                lead_instance = error_info['instance']
+                print(
+                    f"🔍 Обробляємо помилку статусу: {error_info['current_status']} → {error_info['attempted_status']}")
+                print(f"   Причина: {error_info['reason']}")
 
-                # Отримуємо доступні переходи
-                available_transitions = LeadStatusValidator.get_allowed_transitions(current_status, lead_instance)
-
-                print(f"🔍 Обробляємо помилку переходу статусу: {current_status} → {attempted_status}")
-
-                # 🔥 ПОВЕРТАЄМО ПРАВИЛЬНУ СТРУКТУРУ data/meta
+                # 🔥 ПОВЕРТАЄМО ПРАВИЛЬНУ СТРУКТУРУ ПОМИЛКИ
                 return Response({
-                    "data": {
-                        "success": False
-                    },
+                    "data": None,
                     "meta": {
-                        "message": reason,
+                        "message": error_info['reason'],
                         "errors": {
                             "type": "INVALID_TRANSITION",
-                            "message": reason,
+                            "message": error_info['reason'],
                             "details": {
                                 "current_status": {
-                                    "code": current_status,
-                                    "name": LeadStatusValidator.STATUS_NAMES.get(current_status, current_status)
+                                    "code": error_info['current_status'],
+                                    "name": LeadStatusValidator.STATUS_NAMES.get(error_info['current_status'])
                                 },
                                 "attempted_status": {
-                                    "code": attempted_status,
-                                    "name": LeadStatusValidator.STATUS_NAMES.get(attempted_status, attempted_status)
+                                    "code": error_info['attempted_status'],
+                                    "name": LeadStatusValidator.STATUS_NAMES.get(error_info['attempted_status'])
                                 },
                                 "available_transitions": [
                                     {
                                         "code": status,
                                         "name": LeadStatusValidator.STATUS_NAMES.get(status, status),
-                                        "description": f"Перейти в {status}"
+                                        "description": f"Перейти в {LeadStatusValidator.STATUS_NAMES.get(status, status)}"
                                     }
-                                    for status in available_transitions
-                                ]
+                                    for status in error_info['available_transitions']
+                                ],
+                                "requirements": LeadStatusValidator.get_detailed_requirements(
+                                    error_info['current_status'],
+                                    error_info['attempted_status'],
+                                    error_info['instance']
+                                ),
+                                "next_action": LeadStatusValidator.get_next_required_action(error_info['instance'])
                             }
                         },
                         "timestamp": timezone.now().isoformat(),
@@ -2723,117 +2767,100 @@ class LeadViewSet(viewsets.ModelViewSet):
                     }
                 }, status=400)
 
-            # 🔥 ДРУГИЙ ВАРІАНТ: перевіряємо чи є "STATUS_TRANSITION_ERROR" в помилках
-            if 'status' in e.detail:
-                status_errors = e.detail['status']
-
-                # Якщо це список і містить наш маркер
-                if isinstance(status_errors, list):
-                    for error in status_errors:
-                        if str(error) == "STATUS_TRANSITION_ERROR":
-                            # Якщо знайшли наш маркер, але немає атрибута - щось пішло не так
-                            print("⚠️ Знайдено STATUS_TRANSITION_ERROR, але немає _status_transition_error атрибута")
-
-                            # Спробуємо відтворити інформацію з request.data
-                            attempted_status = request.data.get('status')
-                            current_status = instance.status
-
-                            if attempted_status:
-                                available_transitions = LeadStatusValidator.get_allowed_transitions(current_status,
-                                                                                                    instance)
-
-                                return Response({
-                                    "data": {
-                                        "success": False
-                                    },
-                                    "meta": {
-                                        "message": f"Неможливо перейти з '{LeadStatusValidator.STATUS_NAMES.get(current_status)}' в '{LeadStatusValidator.STATUS_NAMES.get(attempted_status)}'",
-                                        "errors": {
-                                            "type": "INVALID_TRANSITION",
-                                            "message": f"Недозволений перехід статусу",
-                                            "details": {
-                                                "current_status": {
-                                                    "code": current_status,
-                                                    "name": LeadStatusValidator.STATUS_NAMES.get(current_status,
-                                                                                                 current_status)
-                                                },
-                                                "attempted_status": {
-                                                    "code": attempted_status,
-                                                    "name": LeadStatusValidator.STATUS_NAMES.get(attempted_status,
-                                                                                                 attempted_status)
-                                                },
-                                                "available_transitions": [
-                                                    {
-                                                        "code": status,
-                                                        "name": LeadStatusValidator.STATUS_NAMES.get(status, status),
-                                                        "description": f"Перейти в {status}"
-                                                    }
-                                                    for status in available_transitions
-                                                ]
-                                            }
-                                        },
-                                        "timestamp": timezone.now().isoformat(),
-                                        "status_code": 400
-                                    }
-                                }, status=400)
-
-            # 🔥 ДЛЯ ІНШИХ ПОМИЛОК ВАЛІДАЦІЇ - використовуємо APIResponse
+            # 🔥 ІНШІ ПОМИЛКИ ВАЛІДАЦІЇ
             return APIResponse.validation_error(
                 message="Помилка валідації даних",
-                field_errors=e.detail if hasattr(e, 'detail') else {"general": [str(e)]},
+                field_errors=e.detail,
                 meta={
-                    "validation_time": timezone.now(),
-                    "lead_id": instance.id
+                    "lead_id": instance.id,
+                    "validation_type": "serializer_validation"
                 }
             )
 
+        # 🔥 УСПІШНЕ ОНОВЛЕННЯ
         try:
             updated_instance = serializer.save()
+
+            # Оновлюємо status_updated_at якщо статус змінився
+            if 'status' in request.data and old_data['status'] != updated_instance.status:
+                updated_instance.status_updated_at = timezone.now()
+                updated_instance.save(update_fields=['status_updated_at'])
+
             smart_cache_invalidation(
                 lead_id=updated_instance.id,
                 manager_id=updated_instance.assigned_to.id if updated_instance.assigned_to else None
             )
 
+            # Відстежуємо зміни
             changes = {}
             if old_data['status'] != updated_instance.status:
-                changes['status'] = {'old': old_data['status'], 'new': updated_instance.status}
+                changes['status'] = {
+                    'old': old_data['status'],
+                    'old_name': LeadStatusValidator.STATUS_NAMES.get(old_data['status']),
+                    'new': updated_instance.status,
+                    'new_name': LeadStatusValidator.STATUS_NAMES.get(updated_instance.status),
+                    'updated_at': updated_instance.status_updated_at.isoformat() if updated_instance.status_updated_at else None
+                }
 
-            if old_data['price'] != float(updated_instance.price or 0):
-                changes['price'] = {'old': old_data['price'], 'new': float(updated_instance.price or 0)}
+            if abs(old_data['price'] - float(updated_instance.price or 0)) > 0.01:
+                changes['price'] = {
+                    'old': old_data['price'],
+                    'new': float(updated_instance.price or 0)
+                }
 
             new_assigned = updated_instance.assigned_to.username if updated_instance.assigned_to else None
             if old_data['assigned_to'] != new_assigned:
-                changes['assigned_to'] = {'old': old_data['assigned_to'], 'new': new_assigned}
+                changes['assigned_to'] = {
+                    'old': old_data['assigned_to'],
+                    'new': new_assigned
+                }
 
-            if old_data['full_name'] != updated_instance.full_name:
-                changes['full_name'] = {'old': old_data['full_name'], 'new': updated_instance.full_name}
+            # Отримуємо оновлену інформацію
+            payment_info = LeadStatusValidator.get_payment_info(updated_instance)
+            available_statuses = LeadStatusValidator.get_allowed_transitions(updated_instance.status, updated_instance)
+            next_action = LeadStatusValidator.get_next_required_action(updated_instance)
 
-            if old_data['phone'] != updated_instance.phone:
-                changes['phone'] = {'old': old_data['phone'], 'new': updated_instance.phone}
+            print(f"✅ Лід #{updated_instance.id} успішно оновлено")
+            if changes:
+                print(f"   Зміни: {changes}")
 
-            # 🔥 ПОВЕРТАЄМО УСПІШНУ ВІДПОВІДЬ З ПРАВИЛЬНОЮ СТРУКТУРОЮ
             return APIResponse.success(
-                data=serializer.data,
+                data=LeadSerializer(updated_instance, context={'request': request}).data,
                 message=f"✅ Лід #{updated_instance.id} успішно оновлено",
                 meta={
                     "updated": True,
                     "lead_id": updated_instance.id,
-                    "update_time": timezone.now(),
-                    "cache_cleared": True,
-                    "partial_update": partial,
                     "changes_made": changes,
                     "total_changes": len(changes),
-                    "payment_info": LeadStatusValidator.get_payment_info(updated_instance)
+                    "update_time": timezone.now(),
+                    "status_info": {
+                        "current_status": {
+                            "code": updated_instance.status,
+                            "name": LeadStatusValidator.STATUS_NAMES.get(updated_instance.status)
+                        },
+                        "available_transitions": [
+                            {
+                                "code": status,
+                                "name": LeadStatusValidator.STATUS_NAMES.get(status, status)
+                            }
+                            for status in available_statuses
+                        ],
+                        "next_action": next_action
+                    },
+                    "payment_info": payment_info,
+                    "cache_cleared": True
                 }
             )
 
         except Exception as e:
+            print(f"❌ Помилка оновлення ліда: {str(e)}")
             return APIResponse.system_error(
                 message=f"❌ Помилка оновлення ліда: {str(e)}",
                 exception_details={"exception": str(e)},
                 meta={
+                    "lead_id": instance.id,
                     "error_time": timezone.now(),
-                    "lead_id": instance.id
+                    "attempted_changes": request.data
                 }
             )
 

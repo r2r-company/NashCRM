@@ -97,6 +97,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'asterisk',
 ]
 
 # 🚀 ШВИДКИЙ MIDDLEWARE без кешування

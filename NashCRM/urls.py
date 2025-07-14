@@ -18,17 +18,17 @@ from django.contrib import admin
 from django.urls import path, include
 
 from backend import views
-from backend.views import  map_search_view
+from backend.views import map_search_view
 from django.conf import settings
 from django.conf.urls.static import static
 
 urlpatterns = [
-    path('', views.home, name="home"),
-    path("admin/map-search/", map_search_view, name="map_search"),
+                  path('', views.home, name="home"),
+                  path("admin/map-search/", map_search_view, name="map_search"),
 
-    path('admin/', admin.site.urls),
-    path('api/', include('backend.urls')),  # ← сюди летить весь API з backend/
-    path('whatsapp/', include('whatsapp.urls')),
+                  path('admin/', admin.site.urls),
+                  path('api/', include('backend.urls')),  # ← сюди летить весь API з backend/
+                  path('whatsapp/', include('whatsapp.urls')),
+                  path("api/asterisk/", include("asterisk.urls")),
 
-
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+              ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
